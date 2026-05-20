@@ -9,9 +9,12 @@ import com.yuki.enterprise_private_rag_qa.client.EmbeddingClient;
 import com.yuki.enterprise_private_rag_qa.entity.EsDocument;
 import com.yuki.enterprise_private_rag_qa.entity.TextChunk;
 import com.yuki.enterprise_private_rag_qa.model.DocumentVector;
+import com.yuki.enterprise_private_rag_qa.model.FileUpload;
 import com.yuki.enterprise_private_rag_qa.repository.DocumentVectorRepository;
+import com.yuki.enterprise_private_rag_qa.repository.FileUploadRepository;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.IntStream;
 
@@ -29,6 +32,9 @@ public class VectorizationService {
 
     @Autowired
     private DocumentVectorRepository documentVectorRepository;
+
+    @Autowired
+    private FileUploadRepository fileUploadRepository;
 
     /**
      * 执行向量化操作
@@ -86,6 +92,34 @@ public class VectorizationService {
         }
     }
     
+
+    /**
+     * 将数据库中已有分块重新写入 Elasticsearch（用于索引映射变更后的修复）。
+     */
+    public int reindexAllFromDatabase() {
+        List<String> fileMd5List = documentVectorRepository.findDistinctFileMd5s();
+        if (fileMd5List.isEmpty()) {
+            logger.info("无待重建索引的文档分块");
+            return 0;
+        }
+        int success = 0;
+        for (String fileMd5 : fileMd5List) {
+            Optional<FileUpload> upload = fileUploadRepository.findByFileMd5(fileMd5);
+            if (upload.isEmpty()) {
+                logger.warn("跳过重建索引，未找到 file_upload 记录: {}", fileMd5);
+                continue;
+            }
+            FileUpload meta = upload.get();
+            try {
+                vectorize(fileMd5, meta.getUserId(), meta.getOrgTag(), meta.isPublic());
+                success++;
+            } catch (Exception e) {
+                logger.error("重建索引失败, fileMd5={}", fileMd5, e);
+            }
+        }
+        logger.info("Elasticsearch 重建索引完成: {}/{} 个文件", success, fileMd5List.size());
+        return success;
+    }
 
     /**
      * 获取文件分块内容

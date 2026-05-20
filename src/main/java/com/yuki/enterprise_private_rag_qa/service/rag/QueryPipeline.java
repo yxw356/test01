@@ -1,10 +1,13 @@
 package com.yuki.enterprise_private_rag_qa.service.rag;
 
+import com.yuki.enterprise_private_rag_qa.config.RagProperties;
 import com.yuki.enterprise_private_rag_qa.model.query.QueryInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -32,6 +35,7 @@ public class QueryPipeline {
     private final EntityExtractor entityExtractor;
     private final QueryRewriter queryRewriter;
     private final HydeGenerator hydeGenerator;
+    private final RagProperties ragProperties;
 
     private final ExecutorService executor = Executors.newFixedThreadPool(3);
 
@@ -40,13 +44,15 @@ public class QueryPipeline {
                          IntentDetector intentDetector,
                          EntityExtractor entityExtractor,
                          QueryRewriter queryRewriter,
-                         HydeGenerator hydeGenerator) {
+                         HydeGenerator hydeGenerator,
+                         RagProperties ragProperties) {
         this.normalizer = normalizer;
         this.cleaner = cleaner;
         this.intentDetector = intentDetector;
         this.entityExtractor = entityExtractor;
         this.queryRewriter = queryRewriter;
         this.hydeGenerator = hydeGenerator;
+        this.ragProperties = ragProperties;
     }
 
     /**
@@ -67,54 +73,82 @@ public class QueryPipeline {
         String normalizedQuery = normalizer.normalize(rawQuery);
         info.setNormalizedQuery(normalizedQuery);
 
-        // Step 2~4: 并行执行 Cleaning、Intent Detection、Entity Extraction
+        boolean enableRewrite = ragProperties.getPipeline().isEnableQueryRewrite();
+        boolean enableHyde = ragProperties.getPipeline().isEnableHyde();
+        boolean enableEntityLlm = enableRewrite || enableHyde;
+
+        // Step 2~4: 并行执行 Cleaning、Intent Detection、（可选）Entity Extraction
         CompletableFuture<String> cleaningFuture = CompletableFuture.supplyAsync(
                 () -> cleaner.clean(normalizedQuery), executor);
 
         CompletableFuture<String> intentFuture = CompletableFuture.supplyAsync(
                 () -> intentDetector.detect(normalizedQuery), executor);
 
-        CompletableFuture<EntityExtractor.EntityResult> entityFuture = CompletableFuture.supplyAsync(
-                () -> entityExtractor.extract(normalizedQuery, chatHistory), executor);
+        CompletableFuture<EntityExtractor.EntityResult> entityFuture = null;
+        if (enableEntityLlm) {
+            entityFuture = CompletableFuture.supplyAsync(
+                    () -> entityExtractor.extract(normalizedQuery, chatHistory), executor);
+        }
 
-        // 等待三个并行任务完成
-        CompletableFuture.allOf(cleaningFuture, intentFuture, entityFuture).join();
+        if (entityFuture != null) {
+            CompletableFuture.allOf(cleaningFuture, intentFuture, entityFuture).join();
+        } else {
+            CompletableFuture.allOf(cleaningFuture, intentFuture).join();
+        }
 
         try {
             info.setCleanedQuery(cleaningFuture.get());
             info.setIntent(intentFuture.get());
-            EntityExtractor.EntityResult entityResult = entityFuture.get();
-            info.setEntities(entityResult.entities());
-            info.setKeywords(entityResult.keywords());
+            if (entityFuture != null) {
+                EntityExtractor.EntityResult entityResult = entityFuture.get();
+                info.setEntities(entityResult.entities());
+                info.setKeywords(entityResult.keywords());
+            } else {
+                info.setEntities(Collections.emptyList());
+                info.setKeywords(Collections.emptyList());
+            }
         } catch (Exception e) {
             logger.error("Parallel tasks failed: {}", e.getMessage(), e);
             // 设置 fallback 值
             if (info.getCleanedQuery() == null) info.setCleanedQuery(normalizedQuery);
             if (info.getIntent() == null) info.setIntent("通用问答");
+            if (info.getEntities() == null) info.setEntities(Collections.emptyList());
+            if (info.getKeywords() == null) info.setKeywords(Collections.emptyList());
         }
 
         // Step 5: Query Rewrite（依赖 step1~4 的全部输出）
-        QueryRewriter.RewriteResult rewriteResult = queryRewriter.rewrite(
-                info.getRawQuery(),
-                info.getNormalizedQuery(),
-                info.getCleanedQuery(),
-                chatHistory,
-                info.getIntent(),
-                info.getEntities(),
-                info.getKeywords()
-        );
-        info.setMainRewrittenQuery(rewriteResult.mainRewrittenQuery());
-        info.setRewrittenQueries(rewriteResult.rewrittenQueries());
+        if (enableRewrite) {
+            QueryRewriter.RewriteResult rewriteResult = queryRewriter.rewrite(
+                    info.getRawQuery(),
+                    info.getNormalizedQuery(),
+                    info.getCleanedQuery(),
+                    chatHistory,
+                    info.getIntent(),
+                    info.getEntities(),
+                    info.getKeywords()
+            );
+            info.setMainRewrittenQuery(rewriteResult.mainRewrittenQuery());
+            info.setRewrittenQueries(rewriteResult.rewrittenQueries());
+        } else {
+            info.setMainRewrittenQuery(rawQuery);
+            info.setRewrittenQueries(List.of(rawQuery));
+            logger.debug("Query rewrite disabled by config, using raw query");
+        }
 
         // Step 6: HyDE Generation（依赖 main_rewritten_query）
-        String hydeDoc = hydeGenerator.generate(
-                info.getRawQuery(),
-                info.getNormalizedQuery(),
-                info.getIntent(),
-                info.getEntities(),
-                info.getMainRewrittenQuery()
-        );
-        info.setHydeDocument(hydeDoc);
+        if (enableHyde) {
+            String hydeDoc = hydeGenerator.generate(
+                    info.getRawQuery(),
+                    info.getNormalizedQuery(),
+                    info.getIntent(),
+                    info.getEntities(),
+                    info.getMainRewrittenQuery()
+            );
+            info.setHydeDocument(hydeDoc);
+        } else {
+            info.setHydeDocument(null);
+            logger.debug("HyDE disabled by config");
+        }
 
         long elapsed = System.currentTimeMillis() - startTime;
         logger.info("QueryPipeline completed in {}ms. Intent: {}, Entities: {}, Rewritten: {}, HyDE: {}",

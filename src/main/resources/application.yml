@@ -99,19 +99,26 @@ log4j:
       apache:
         tika: DEBUG
 
+# 本机 vLLM（OpenAI 兼容）：vllm serve ... --port 8000 --api-key vllm_api_key_12345
+# 查看已加载模型：curl -H "Authorization: Bearer vllm_api_key_12345" http://127.0.0.1:8000/v1/models
 deepseek:
   api:
-    url: http://localhost:11434/v1
-    model: deepseek-r1:7b
-    key:
+    url: http://127.0.0.1:8000/v1
+    model: Qwen3.6-35B-A3B
+    key: vllm_api_key_12345
 
+# 向量：当前 vLLM 对话实例不提供 /embeddings，需另起 embedding 服务（见下方注释）
+# 方案 A - 第二个 vLLM（推荐）:
+#   vllm serve BAAI/bge-m3 --task embed --host 127.0.0.1 --port 8001 \
+#     --api-key vllm_api_key_12345 --served-model-name bge-m3
+# 方案 B - Ollama 仅跑 nomic-embed-text，url 改回 http://localhost:11434/v1
 embedding:
   api:
-    url: http://localhost:11434/v1
-    key:
-    model: nomic-embed-text:latest
+    url: http://127.0.0.1:8001/v1
+    key: vllm_api_key_12345
+    model: bge-m3
     batch-size: 10
-    dimension: 768
+    dimension: 1024
 
 ai:
   prompt:
@@ -132,9 +139,10 @@ ai:
 
 rag:
   pipeline:
-    enable-query-rewrite: true
-    enable-hyde: true
-    enable-reflection: true
+    # 本地 vLLM（35B）下开启会显著拖慢检索：Stage1 多次 LLM 可达数分钟
+    enable-query-rewrite: false
+    enable-hyde: false
+    enable-reflection: false
     max-reflection-rounds: 1
   intent:
     enable-llm: false

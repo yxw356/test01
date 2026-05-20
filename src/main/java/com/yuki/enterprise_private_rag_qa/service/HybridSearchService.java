@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 
 import com.yuki.enterprise_private_rag_qa.client.EmbeddingClient;
 import com.yuki.enterprise_private_rag_qa.entity.EsDocument;
+import com.yuki.enterprise_private_rag_qa.entity.EsSearchDocument;
 import com.yuki.enterprise_private_rag_qa.entity.SearchResult;
 import com.yuki.enterprise_private_rag_qa.exception.CustomException;
 import com.yuki.enterprise_private_rag_qa.model.FileUpload;
@@ -42,6 +43,9 @@ public class HybridSearchService {
     private static final String INDEX_NAME = "knowledge_base";
     private static final int RECALL_MULTIPLIER = 30;
     private static final int RRF_K = 60;
+    /** 检索响应不返回向量字段，避免 1024 维向量导致 Jackson 反序列化失败 */
+    private static final List<String> SOURCE_EXCLUDES = List.of("vector");
+    private static final Class<EsSearchDocument> SEARCH_DOC_CLASS = EsSearchDocument.class;
 
     @Autowired
     private ElasticsearchClient esClient;
@@ -126,8 +130,9 @@ public class HybridSearchService {
         try {
             logger.debug("开始执行纯文本搜索，用户数据库ID: {}, 标签: {}", userDbId, userEffectiveTags);
 
-            SearchResponse<EsDocument> response = esClient.search(s -> s
+            SearchResponse<EsSearchDocument> response = esClient.search(s -> s
                     .index(INDEX_NAME)
+                    .source(src -> src.filter(f -> f.excludes(SOURCE_EXCLUDES)))
                     .query(q -> q
                             .bool(b -> b
                                     // 匹配内容相关性
@@ -143,7 +148,7 @@ public class HybridSearchService {
                     )
                     .minScore(0.3d)
                     .size(getRecallK(topK)),
-                    EsDocument.class
+                    SEARCH_DOC_CLASS
             );
 
             logger.debug("纯文本查询执行完成，命中数量: {}, 最大分数: {}", 
@@ -205,15 +210,16 @@ public class HybridSearchService {
      * 仅使用文本匹配的搜索方法
      */
     private List<SearchResult> textOnlySearch(String query, int topK) throws Exception {
-        SearchResponse<EsDocument> response = esClient.search(s -> s
+        SearchResponse<EsSearchDocument> response = esClient.search(s -> s
                 .index(INDEX_NAME)
+                .source(src -> src.filter(f -> f.excludes(SOURCE_EXCLUDES)))
                 .query(q -> q.bool(b -> b
                         .must(m -> m.match(ma -> ma
                                 .field("textContent")
                                 .query(query)))
                         .filter(buildPublicOnlyFilter())))
                 .size(getRecallK(topK)),
-                EsDocument.class
+                SEARCH_DOC_CLASS
         );
 
         List<SearchResult> childResults = response.hits().hits().stream()
@@ -282,8 +288,9 @@ public class HybridSearchService {
     }
 
     private List<SearchResult> semanticSearch(List<Float> queryVector, Query permissionFilter, int recallK) throws Exception {
-        SearchResponse<EsDocument> response = esClient.search(s -> s
+        SearchResponse<EsSearchDocument> response = esClient.search(s -> s
                         .index(INDEX_NAME)
+                        .source(src -> src.filter(f -> f.excludes(SOURCE_EXCLUDES)))
                         .knn(kn -> kn
                                 .field("vector")
                                 .queryVector(queryVector)
@@ -292,7 +299,7 @@ public class HybridSearchService {
                                 .filter(permissionFilter)
                         )
                         .size(recallK),
-                EsDocument.class
+                SEARCH_DOC_CLASS
         );
 
         logger.debug("语义检索完成，命中数量: {}, 最大分数: {}",
@@ -303,8 +310,9 @@ public class HybridSearchService {
     }
 
     private List<SearchResult> keywordSearch(String query, Query permissionFilter, int recallK, boolean minScore) throws Exception {
-        SearchResponse<EsDocument> response = esClient.search(s -> {
+        SearchResponse<EsSearchDocument> response = esClient.search(s -> {
                     s.index(INDEX_NAME)
+                            .source(src -> src.filter(f -> f.excludes(SOURCE_EXCLUDES)))
                             .query(q -> q.bool(b -> b
                                     .must(m -> m.match(ma -> ma
                                             .field("textContent")
@@ -316,7 +324,7 @@ public class HybridSearchService {
                     }
                     return s;
                 },
-                EsDocument.class
+                SEARCH_DOC_CLASS
         );
 
         logger.debug("关键词检索完成，命中数量: {}, 最大分数: {}",
@@ -434,9 +442,13 @@ public class HybridSearchService {
         return Query.of(q -> q.bool(b -> {
             b.should(s -> s.term(t -> t.field("userId").value(userDbId)));
             appendPublicAccessShoulds(b);
-            userEffectiveTags.forEach(tag ->
-                    b.should(s -> s.term(t -> t.field("orgTag").value(tag)))
-            );
+            userEffectiveTags.forEach(tag -> {
+                b.should(s -> s.term(t -> t.field("orgTag").value(tag)));
+                // 兼容上传时使用小写 default、组织表使用大写 DEFAULT 的情况
+                if (tag != null && "DEFAULT".equalsIgnoreCase(tag)) {
+                    b.should(s -> s.term(t -> t.field("orgTag").value("default")));
+                }
+            });
             return b.minimumShouldMatch("1");
         }));
     }
@@ -454,14 +466,15 @@ public class HybridSearchService {
         b.should(s -> s.term(t -> t.field("isPublic").value(true)));
     }
 
-    private SearchResult toSearchResult(Hit<EsDocument> hit) {
-        EsDocument source = hit.source();
+    private SearchResult toSearchResult(Hit<EsSearchDocument> hit) {
+        EsSearchDocument source = hit.source();
         if (source == null) {
             throw new IllegalStateException("Elasticsearch hit source is null");
         }
+        String preview = source.getTextContent() == null ? "" : source.getTextContent();
         logger.debug("检索结果 - 文件: {}, 块: {}, 分数: {}, 内容: {}",
                 source.getFileMd5(), source.getChunkId(), hit.score(),
-                source.getTextContent().substring(0, Math.min(50, source.getTextContent().length())));
+                preview.substring(0, Math.min(50, preview.length())));
         return new SearchResult(
                 source.getFileMd5(),
                 source.getChunkId(),
@@ -471,7 +484,7 @@ public class HybridSearchService {
                 hit.score(),
                 source.getUserId(),
                 source.getOrgTag(),
-                source.isPublic(),
+                Boolean.TRUE.equals(source.getIsPublic()),
                 null
         );
     }

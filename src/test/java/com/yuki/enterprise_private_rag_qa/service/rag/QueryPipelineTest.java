@@ -33,13 +33,15 @@ class QueryPipelineTest {
         normalizer = new QueryNormalizer();
         cleaner = new QueryCleaner();
         RagProperties ragProperties = new RagProperties();
+        ragProperties.getPipeline().setEnableQueryRewrite(true);
+        ragProperties.getPipeline().setEnableHyde(true);
         intentDetector = new IntentDetector(llmClient, ragProperties);
         ObjectMapper objectMapper = new ObjectMapper();
         entityExtractor = new EntityExtractor(llmClient, objectMapper);
         queryRewriter = new QueryRewriter(llmClient, objectMapper);
         hydeGenerator = new HydeGenerator(llmClient);
         pipeline = new QueryPipeline(normalizer, cleaner, intentDetector,
-                entityExtractor, queryRewriter, hydeGenerator);
+                entityExtractor, queryRewriter, hydeGenerator, ragProperties);
     }
 
     @Test

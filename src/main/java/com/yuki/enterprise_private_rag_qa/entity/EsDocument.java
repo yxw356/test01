@@ -1,6 +1,7 @@
 package com.yuki.enterprise_private_rag_qa.entity;
 
-
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
 
 /**
@@ -8,6 +9,7 @@ import lombok.Data;
  * 包含文档内容和权限信息
  */
 @Data
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class EsDocument {
 
     private String id;             // 文档唯一标识
@@ -20,7 +22,9 @@ public class EsDocument {
     private String modelVersion;   // 向量生成模型版本
     private String userId;         // 上传用户ID
     private String orgTag;         // 组织标签
-    private boolean isPublic;      // 是否公开
+    /** 使用包装类型，避免 Jackson 将 isPublic 映射为 JSON 字段 public */
+    @JsonProperty("isPublic")
+    private Boolean isPublic;      // 是否公开
 
     /**
      * 默认构造函数，用于Jackson反序列化

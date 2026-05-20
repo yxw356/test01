@@ -38,8 +38,12 @@
 | 核心能力 | 知识资产管理、混合检索、RAG 问答、权限隔离、多轮对话 |
 | 后端技术 | Spring Boot、MySQL、Redis、Apache Tika、Elasticsearch、MinIO、Kafka、Spring Security、WebSocket |
 | 前端技术 | Vue 3、TypeScript、Vite、Pinia、Naive UI |
-| 模型接入 | Ollama / OpenAI 兼容接口 |
+| 模型接入 | OpenAI 兼容接口（Ollama / vLLM 等） |
 
+| 文档 | 说明 |
+| --- | --- |
+| [docs/操作手册.md](./docs/操作手册.md) | **新手安装部署全流程**（推荐先看） |
+| [docs/需求文档.md](./docs/需求文档.md) | 功能需求、验收标准与排障索引 |
 
 ## 核心能力
 
@@ -106,6 +110,8 @@ flowchart LR
 
 ## 快速启动
 
+> 第一次部署请直接阅读 **[安装部署操作手册](./docs/操作手册.md)**，内含 Docker、vLLM 双服务、验收与踩坑说明。
+
 ### 1. 环境要求
 
 | 工具 | 版本建议 |
@@ -134,19 +140,30 @@ docker compose -f docs/docker-compose.yaml up -d
 
 ### 3. 配置模型服务
 
-项目默认通过 OpenAI 兼容接口访问本地或远程模型服务，默认配置指向：
+项目通过 **OpenAI 兼容接口** 接入模型。本地推荐 **vLLM 双实例**（对话与向量分离）：
 
-- 聊天模型地址：`http://localhost:11434/v1/chat/completions`
-- 向量模型地址：`http://localhost:11434/v1/embeddings`
+| 能力 | 默认地址 | 说明 |
+| --- | --- | --- |
+| 对话 LLM | `http://127.0.0.1:8000/v1` | 如 Qwen3.6-35B-A3B，路径 `/chat/completions` |
+| 向量 Embedding | `http://127.0.0.1:8001/v1` | **bge-m3**，路径 `/embeddings`（勿与对话共用 8000） |
 
-可在 [src/main/resources/application.yml](./src/main/resources/application.yml) 中修改：
+Embedding 示例（需与 `embedding.api.dimension: 1024`、ES 索引 `vector.dims` 一致）：
 
-- `deepseek.api.url`
-- `deepseek.api.model`
-- `deepseek.api.key`
-- `embedding.api.url`
-- `embedding.api.model`
-- `embedding.api.key`
+```bash
+vllm serve /path/to/bge-m3 --runner pooling --convert embed \
+  --host 127.0.0.1 --port 8001 --api-key vllm_api_key_12345 \
+  --served-model-name bge-m3 --gpu-memory-utilization 0.04
+```
+
+也可改用 Ollama（`http://localhost:11434/v1`），须保证向量维度与 ES 映射一致。
+
+在 [src/main/resources/application.yml](./src/main/resources/application.yml) 中修改：
+
+- `deepseek.api.*` — 对话模型
+- `embedding.api.*` — 向量模型（含 `dimension: 1024`）
+- `rag.pipeline.*` — 本地开发建议关闭 query-rewrite / hyde / reflection，避免问答前等待数分钟
+
+**注意**：MinIO 需存在桶 `uploads`（应用启动时会自动创建）；上传后需等待 Kafka 异步索引完成再检索。
 
 ### 4. 启动后端
 
@@ -189,3 +206,13 @@ pnpm dev
 | MinIO Console | `http://localhost:19001` |
 | Kafka | `localhost:9092` |
 | Elasticsearch | `http://localhost:9200` |
+
+## 常见问题
+
+| 现象 | 处理 |
+| --- | --- |
+| 已上传文件但问答/检索无结果 | 检查 `curl -u elastic:PaiSmart2025 http://localhost:9200/knowledge_base/_count` 是否为 0；查看日志是否有向量维度 768/1024 不匹配或 `bulkIndex` 失败，重启后端会自动校验 ES 维度并重建索引 |
+| 上传报 MinIO NoSuchBucket | 确认 MinIO 已启动；桶名 `uploads` 与 `application.yml` 中 `minio.bucketName` 一致 |
+| 问答响应很慢 | 将 `rag.pipeline` 下 `enable-query-rewrite`、`enable-hyde`、`enable-reflection` 设为 `false` |
+
+更多说明见 [docs/需求文档.md](./docs/需求文档.md#9-运维与排障)。
