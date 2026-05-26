@@ -5,7 +5,9 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yuki.enterprise_private_rag_qa.client.DeepSeekClient;
 import com.yuki.enterprise_private_rag_qa.entity.SearchResult;
+import com.yuki.enterprise_private_rag_qa.model.AuditAction;
 import com.yuki.enterprise_private_rag_qa.service.rag.RagPipeline;
+import com.yuki.enterprise_private_rag_qa.utils.AuditSupport;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,6 +40,8 @@ public class ChatHandler {
     private final DeepSeekClient deepSeekClient;
     private final RagPipeline ragPipeline;
     private final ObjectMapper objectMapper;
+    private final AuditService auditService;
+    private final OperationMetricsService operationMetricsService;
     
     // 用于存储每个会话的完整响应
     private final Map<String, StringBuilder> responseBuilders = new ConcurrentHashMap<>();
@@ -47,20 +51,29 @@ public class ChatHandler {
     private final Map<String, ActiveResponse> activeResponses = new ConcurrentHashMap<>();
     // 停止标志 - 简单方案
     private final Map<String, Boolean> stopFlags = new ConcurrentHashMap<>();
+    private final Map<String, Long> chatStartTimes = new ConcurrentHashMap<>();
 
     public ChatHandler(RedisTemplate<String, String> redisTemplate,
                       HybridSearchService searchService,
                       DeepSeekClient deepSeekClient,
-                      RagPipeline ragPipeline) {
+                      RagPipeline ragPipeline,
+                      AuditService auditService,
+                      OperationMetricsService operationMetricsService) {
         this.redisTemplate = redisTemplate;
         this.searchService = searchService;
         this.deepSeekClient = deepSeekClient;
         this.ragPipeline = ragPipeline;
+        this.auditService = auditService;
+        this.operationMetricsService = operationMetricsService;
         this.objectMapper = new ObjectMapper();
     }
 
     public void processMessage(String userId, String userMessage, WebSocketSession session) {
         logger.info("开始处理消息，用户ID: {}, 会话ID: {}", userId, session.getId());
+        long chatStart = System.currentTimeMillis();
+        chatStartTimes.put(session.getId(), chatStart);
+        auditService.recordSuccess(userId, userId, AuditAction.CHAT, "conversation",
+                session.getId(), AuditSupport.truncate(userMessage, 200), null, null);
         try {
             String sessionId = session.getId();
             stopFlags.remove(sessionId);
@@ -155,6 +168,10 @@ public class ChatHandler {
 
         String completeResponse = responseBuilder.toString();
         logger.info("DeepSeek响应流已完成，长度: {}", completeResponse.length());
+        Long startedAt = chatStartTimes.remove(sessionId);
+        if (startedAt != null) {
+            operationMetricsService.recordChatDuration(System.currentTimeMillis() - startedAt);
+        }
 
         sendCompletionNotification(session);
 

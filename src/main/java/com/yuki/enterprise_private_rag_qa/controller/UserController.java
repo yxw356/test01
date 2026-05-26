@@ -6,11 +6,16 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import com.yuki.enterprise_private_rag_qa.exception.CustomException;
+import com.yuki.enterprise_private_rag_qa.model.AuditAction;
 import com.yuki.enterprise_private_rag_qa.model.User;
 import com.yuki.enterprise_private_rag_qa.repository.UserRepository;
+import com.yuki.enterprise_private_rag_qa.service.AuditService;
 import com.yuki.enterprise_private_rag_qa.service.UserService;
+import com.yuki.enterprise_private_rag_qa.utils.AuditSupport;
 import com.yuki.enterprise_private_rag_qa.utils.JwtUtils;
 import com.yuki.enterprise_private_rag_qa.utils.LogUtils;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -30,6 +35,9 @@ public class UserController {
 
     @Autowired
     private UserRepository userRepository;
+
+    @Autowired
+    private AuditService auditService;
 
     // 用户注册接口
     // 接收用户请求体中的用户名和密码，并调用用户服务进行注册
@@ -63,8 +71,9 @@ public class UserController {
     // 用户登录接口
     // 验证用户身份并生成JWT令牌
     @PostMapping("/login")
-    public ResponseEntity<?> login(@RequestBody UserRequest request) {
+    public ResponseEntity<?> login(@RequestBody UserRequest request, HttpServletRequest httpRequest) {
         LogUtils.PerformanceMonitor monitor = LogUtils.startPerformanceMonitor("USER_LOGIN");
+        long start = System.currentTimeMillis();
         try {
             if (request.username() == null || request.username().isEmpty() ||
                     request.password() == null || request.password().isEmpty()) {
@@ -75,12 +84,17 @@ public class UserController {
             String username = userService.authenticateUser(request.username(), request.password());
             if (username == null) {
                 LogUtils.logUserOperation(request.username(), "LOGIN", "authentication", "FAILED_INVALID_CREDENTIALS");
+                auditService.recordFailure(null, request.username(), AuditAction.LOGIN, "user",
+                        request.username(), "invalid credentials", AuditSupport.clientIp(httpRequest),
+                        System.currentTimeMillis() - start);
                 return ResponseEntity.status(401).body(Map.of("code", 401, "message", "Invalid credentials"));
             }
             
             String token = jwtUtils.generateToken(username);
             String refreshToken = jwtUtils.generateRefreshToken(username);
             LogUtils.logUserOperation(username, "LOGIN", "token_generation", "SUCCESS");
+            auditService.recordSuccess(null, username, AuditAction.LOGIN, "user", username,
+                    "login success", AuditSupport.clientIp(httpRequest), System.currentTimeMillis() - start);
             monitor.end("登录成功");
             
             return ResponseEntity.ok(Map.of("code", 200, "message", "Login successful", "data", Map.of(

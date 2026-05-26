@@ -173,3 +173,15 @@ rag:
     temperature: 0.1
     supplementary-bm25-top-k: 10
     supplementary-vector-top-k: 10
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when_authorized
+  health:
+    defaults:
+      enabled: true

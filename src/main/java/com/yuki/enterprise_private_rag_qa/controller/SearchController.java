@@ -4,8 +4,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 import com.yuki.enterprise_private_rag_qa.entity.SearchResult;
+import com.yuki.enterprise_private_rag_qa.model.AuditAction;
+import com.yuki.enterprise_private_rag_qa.service.AuditService;
 import com.yuki.enterprise_private_rag_qa.service.HybridSearchService;
+import com.yuki.enterprise_private_rag_qa.utils.AuditSupport;
 import com.yuki.enterprise_private_rag_qa.utils.LogUtils;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.util.List;
 import java.util.Map;
@@ -19,6 +24,9 @@ public class SearchController {
 
     @Autowired
     private HybridSearchService hybridSearchService;
+
+    @Autowired
+    private AuditService auditService;
 
     /**
      * 混合检索接口
@@ -47,8 +55,10 @@ public class SearchController {
     @GetMapping("/hybrid")
     public Map<String, Object> hybridSearch(@RequestParam String query,
                                             @RequestParam(defaultValue = "10") int topK,
-                                            @RequestAttribute(value = "userId", required = false) String userId) {
+                                            @RequestAttribute(value = "userId", required = false) String userId,
+                                            HttpServletRequest request) {
         LogUtils.PerformanceMonitor monitor = LogUtils.startPerformanceMonitor("HYBRID_SEARCH");
+        long start = System.currentTimeMillis();
         try {
             LogUtils.logBusiness("HYBRID_SEARCH", userId != null ? userId : "anonymous", 
                     "开始混合检索: query=%s, topK=%d", query, topK);
@@ -67,6 +77,13 @@ public class SearchController {
             LogUtils.logBusiness("HYBRID_SEARCH", userId != null ? userId : "anonymous", 
                     "混合检索完成: 返回结果数量=%d", results.size());
             monitor.end("混合检索成功");
+            auditService.recordSuccess(
+                    userId, userId, AuditAction.SEARCH, "query",
+                    AuditSupport.truncate(query, 128),
+                    "topK=" + topK + ", hits=" + results.size(),
+                    AuditSupport.clientIp(request),
+                    System.currentTimeMillis() - start
+            );
             
             // 构造统一响应结构
             Map<String, Object> responseBody = new HashMap<>(4);
@@ -79,6 +96,12 @@ public class SearchController {
             LogUtils.logBusinessError("HYBRID_SEARCH", userId != null ? userId : "anonymous", 
                     "混合检索失败: query=%s", e, query);
             monitor.end("混合检索失败: " + e.getMessage());
+            auditService.recordFailure(
+                    userId, userId, AuditAction.SEARCH, "query",
+                    AuditSupport.truncate(query, 128), e.getMessage(),
+                    AuditSupport.clientIp(request),
+                    System.currentTimeMillis() - start
+            );
             
             // 构造错误响应结构，保持与前端解析一致
             Map<String, Object> errorBody = new HashMap<>(4);

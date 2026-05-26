@@ -57,3 +57,20 @@ CREATE TABLE document_vectors (
                                   org_tag VARCHAR(50) COMMENT '文件所属组织标签',
                                   is_public BOOLEAN NOT NULL DEFAULT FALSE COMMENT '文件是否公开'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='文档向量存储表';
+
+CREATE TABLE audit_log (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '审计记录ID',
+    user_id VARCHAR(64) DEFAULT NULL COMMENT '用户ID',
+    username VARCHAR(128) DEFAULT NULL COMMENT '用户名',
+    action VARCHAR(32) NOT NULL COMMENT '操作类型',
+    resource_type VARCHAR(64) DEFAULT NULL COMMENT '资源类型',
+    resource_id VARCHAR(255) DEFAULT NULL COMMENT '资源标识',
+    detail TEXT COMMENT '操作详情',
+    result VARCHAR(32) DEFAULT NULL COMMENT '结果 SUCCESS/FAILURE',
+    client_ip VARCHAR(64) DEFAULT NULL COMMENT '客户端IP',
+    duration_ms BIGINT DEFAULT NULL COMMENT '耗时毫秒',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    INDEX idx_audit_user (user_id),
+    INDEX idx_audit_action (action),
+    INDEX idx_audit_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='审计日志表';

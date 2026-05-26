@@ -8,13 +8,18 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.yuki.enterprise_private_rag_qa.config.KafkaConfig;
+import com.yuki.enterprise_private_rag_qa.model.AuditAction;
 import com.yuki.enterprise_private_rag_qa.model.FileProcessingTask;
 import com.yuki.enterprise_private_rag_qa.model.FileUpload;
 import com.yuki.enterprise_private_rag_qa.repository.FileUploadRepository;
+import com.yuki.enterprise_private_rag_qa.service.AuditService;
 import com.yuki.enterprise_private_rag_qa.service.FileTypeValidationService;
 import com.yuki.enterprise_private_rag_qa.service.UploadService;
 import com.yuki.enterprise_private_rag_qa.service.UserService;
+import com.yuki.enterprise_private_rag_qa.utils.AuditSupport;
 import com.yuki.enterprise_private_rag_qa.utils.LogUtils;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 import org.springframework.transaction.annotation.Transactional;
 
@@ -46,6 +51,9 @@ public class UploadController {
     
     @Autowired
     private FileTypeValidationService fileTypeValidationService;
+
+    @Autowired
+    private AuditService auditService;
 
     public UploadController(UploadService uploadService, KafkaTemplate<String, Object> kafkaTemplate) {
         this.uploadService = uploadService;
@@ -229,7 +237,8 @@ public class UploadController {
     @PostMapping("/merge")
     public ResponseEntity<Map<String, Object>> mergeFile(
             @RequestBody MergeRequest request,
-            @RequestAttribute("userId") String userId) {
+            @RequestAttribute("userId") String userId,
+            HttpServletRequest httpRequest) {
         
         LogUtils.PerformanceMonitor monitor = LogUtils.startPerformanceMonitor("MERGE_FILE");
         try {
@@ -311,6 +320,8 @@ public class UploadController {
             response.put("data", data);
             
             LogUtils.logUserOperation(userId, "MERGE_FILE", request.fileMd5(), "SUCCESS");
+            auditService.recordSuccess(userId, userId, AuditAction.UPLOAD, "document",
+                    request.fileMd5(), "fileName=" + request.fileName(), AuditSupport.clientIp(httpRequest), null);
             monitor.end("文件合并成功");
             return ResponseEntity.ok(response);
         } catch (Exception e) {

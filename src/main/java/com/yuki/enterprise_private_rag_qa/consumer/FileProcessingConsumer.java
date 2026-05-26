@@ -9,6 +9,9 @@ import org.springframework.stereotype.Service;
 
 import com.yuki.enterprise_private_rag_qa.config.KafkaConfig;
 import com.yuki.enterprise_private_rag_qa.model.FileProcessingTask;
+import com.yuki.enterprise_private_rag_qa.model.AuditAction;
+import com.yuki.enterprise_private_rag_qa.service.AuditService;
+import com.yuki.enterprise_private_rag_qa.service.OperationMetricsService;
 import com.yuki.enterprise_private_rag_qa.service.ParseService;
 import com.yuki.enterprise_private_rag_qa.service.VectorizationService;
 
@@ -24,13 +27,20 @@ public class FileProcessingConsumer {
 
     private final ParseService parseService;
     private final VectorizationService vectorizationService;
+    private final OperationMetricsService operationMetricsService;
+    private final AuditService auditService;
     @Autowired
     private KafkaConfig kafkaConfig;
 
 
-    public FileProcessingConsumer(ParseService parseService, VectorizationService vectorizationService) {
+    public FileProcessingConsumer(ParseService parseService,
+                                  VectorizationService vectorizationService,
+                                  OperationMetricsService operationMetricsService,
+                                  AuditService auditService) {
         this.parseService = parseService;
         this.vectorizationService = vectorizationService;
+        this.operationMetricsService = operationMetricsService;
+        this.auditService = auditService;
     }
 
     @KafkaListener(topics = "#{kafkaConfig.getFileProcessingTopic()}", groupId = "#{kafkaConfig.getFileProcessingGroupId()}")
@@ -54,16 +64,27 @@ public class FileProcessingConsumer {
             }
 
             // 解析文件
-            parseService.parseAndSave(task.getFileMd5(), fileStream, 
-                    task.getUserId(), task.getOrgTag(), task.isPublic());
+            parseService.parseAndSave(task.getFileMd5(), fileStream,
+                    task.getUserId(), task.getOrgTag(), task.isPublic(), task.getFileName());
             log.info("文件解析完成，fileMd5: {}", task.getFileMd5());
 
             // 向量化处理
             vectorizationService.vectorize(task.getFileMd5(), 
                     task.getUserId(), task.getOrgTag(), task.isPublic());
             log.info("向量化完成，fileMd5: {}", task.getFileMd5());
+            operationMetricsService.recordIndexSuccess();
+            auditService.recordSuccess(
+                    task.getUserId(), null, AuditAction.INDEX_SUCCESS, "document",
+                    task.getFileMd5(), "fileName=" + task.getFileName(), null, null
+            );
         } catch (Exception e) {
             log.error("Error processing task: {}", task, e);
+            operationMetricsService.recordIndexFailure(e.getMessage());
+            auditService.recordFailure(
+                    task.getUserId(), null, AuditAction.INDEX_FAILURE, "document",
+                    task.getFileMd5(), "fileName=" + task.getFileName() + ", error=" + e.getMessage(),
+                    null, null
+            );
             // 抛出异常让 Kafka 的 DefaultErrorHandler 捕获并触发重试 / 死信
             throw new RuntimeException("Error processing task", e);
         } finally {

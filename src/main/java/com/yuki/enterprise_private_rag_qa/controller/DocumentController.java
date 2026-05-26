@@ -11,13 +11,18 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
+import com.yuki.enterprise_private_rag_qa.model.AuditAction;
 import com.yuki.enterprise_private_rag_qa.model.FileUpload;
 import com.yuki.enterprise_private_rag_qa.model.OrganizationTag;
 import com.yuki.enterprise_private_rag_qa.repository.FileUploadRepository;
 import com.yuki.enterprise_private_rag_qa.repository.OrganizationTagRepository;
+import com.yuki.enterprise_private_rag_qa.service.AuditService;
 import com.yuki.enterprise_private_rag_qa.service.DocumentService;
+import com.yuki.enterprise_private_rag_qa.utils.AuditSupport;
 import com.yuki.enterprise_private_rag_qa.utils.JwtUtils;
 import com.yuki.enterprise_private_rag_qa.utils.LogUtils;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.io.IOException;
 import java.net.URLEncoder;
@@ -47,6 +52,9 @@ public class DocumentController {
     @Autowired
     private JwtUtils jwtUtils;
 
+    @Autowired
+    private AuditService auditService;
+
     /**
      * 删除文档及其相关数据
      * 
@@ -59,7 +67,8 @@ public class DocumentController {
     public ResponseEntity<?> deleteDocument(
             @PathVariable String fileMd5,
             @RequestAttribute("userId") String userId,
-            @RequestAttribute("role") String role) {
+            @RequestAttribute("role") String role,
+            HttpServletRequest request) {
         
         LogUtils.PerformanceMonitor monitor = LogUtils.startPerformanceMonitor("DELETE_DOCUMENT");
         try {
@@ -93,6 +102,8 @@ public class DocumentController {
             documentService.deleteDocument(fileMd5, userId);
             
             LogUtils.logFileOperation(userId, "DELETE", file.getFileName(), fileMd5, "SUCCESS");
+            auditService.recordSuccess(userId, userId, AuditAction.DELETE, "document", fileMd5,
+                    "fileName=" + file.getFileName(), AuditSupport.clientIp(request), null);
             monitor.end("文档删除成功");
             Map<String, Object> response = new HashMap<>();
             response.put("code", 200);
@@ -223,7 +234,8 @@ public class DocumentController {
     @GetMapping("/download")
     public ResponseEntity<?> downloadFileByName(
             @RequestParam String fileName,
-            @RequestParam(required = false) String token) {
+            @RequestParam(required = false) String token,
+            HttpServletRequest httpRequest) {
         
         LogUtils.PerformanceMonitor monitor = LogUtils.startPerformanceMonitor("DOWNLOAD_FILE_BY_NAME");
         try {
@@ -310,6 +322,8 @@ public class DocumentController {
             LogUtils.logFileOperation(userId, "DOWNLOAD", file.getFileName(), file.getFileMd5(), "SUCCESS");
             LogUtils.logUserOperation(userId, "DOWNLOAD_FILE_BY_NAME", fileName, "SUCCESS");
             monitor.end("文件下载链接生成成功");
+            auditService.recordSuccess(userId, userId, AuditAction.DOWNLOAD, "document",
+                    file.getFileMd5(), "fileName=" + fileName, AuditSupport.clientIp(httpRequest), null);
             
             Map<String, Object> response = new HashMap<>();
             response.put("code", 200);
@@ -348,7 +362,8 @@ public class DocumentController {
     @GetMapping("/preview")
     public ResponseEntity<?> previewFileByName(
             @RequestParam String fileName,
-            @RequestParam(required = false) String token) {
+            @RequestParam(required = false) String token,
+            HttpServletRequest httpRequest) {
         
         LogUtils.PerformanceMonitor monitor = LogUtils.startPerformanceMonitor("PREVIEW_FILE_BY_NAME");
         try {
@@ -450,6 +465,8 @@ public class DocumentController {
             LogUtils.logFileOperation(userId, "PREVIEW", file.getFileName(), file.getFileMd5(), "SUCCESS");
             LogUtils.logUserOperation(userId, "PREVIEW_FILE_BY_NAME", fileName, "SUCCESS");
             monitor.end("文件预览内容获取成功");
+            auditService.recordSuccess(userId, userId, AuditAction.PREVIEW, "document",
+                    file.getFileMd5(), "fileName=" + fileName, AuditSupport.clientIp(httpRequest), null);
             
             Map<String, Object> response = new HashMap<>();
             response.put("code", 200);

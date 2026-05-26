@@ -109,7 +109,7 @@ public class HybridSearchService {
             logger.debug("RRF融合和父块聚合完成，语义召回: {}, 关键词召回: {}, 父块结果: {}",
                     semanticResults.size(), keywordResults.size(), results.size());
             attachFileNames(results);
-            return results;
+            return applyAccessPolicy(results, userDbId, userEffectiveTags);
         } catch (Exception e) {
             logger.error("带权限的搜索失败", e);
             // 发生异常时尝试使用纯文本搜索作为后备方案
@@ -161,7 +161,7 @@ public class HybridSearchService {
 
             logger.debug("返回纯文本搜索结果数量: {}", results.size());
             attachFileNames(results);
-            return results;
+            return applyAccessPolicy(results, userDbId, userEffectiveTags);
         } catch (Exception e) {
             logger.error("纯文本搜索失败", e);
             return new ArrayList<>();
@@ -464,6 +464,19 @@ public class HybridSearchService {
         // 兼容 Java boolean isPublic 序列化成 public 以及 mapping 中定义的 isPublic 两种字段名。
         b.should(s -> s.term(t -> t.field("public").value(true)));
         b.should(s -> s.term(t -> t.field("isPublic").value(true)));
+    }
+
+    private List<SearchResult> applyAccessPolicy(List<SearchResult> results, String userDbId,
+                                                   List<String> userEffectiveTags) {
+        return results.stream()
+                .filter(result -> DocumentAccessPolicy.canAccess(
+                        result.getUserId(),
+                        result.getOrgTag(),
+                        Boolean.TRUE.equals(result.getIsPublic()),
+                        userDbId,
+                        userEffectiveTags
+                ))
+                .toList();
     }
 
     private SearchResult toSearchResult(Hit<EsSearchDocument> hit) {

@@ -39,6 +39,9 @@ public class ParseService {
     @Autowired(required = false)
     private EmbeddingClient embeddingClient;
 
+    @Autowired
+    private TabularParseService tabularParseService;
+
     @Value("${file.parsing.chunk-size}")
     private int chunkSize;
 
@@ -62,12 +65,25 @@ public class ParseService {
      */
     public void parseAndSave(String fileMd5, InputStream fileStream,
                              String userId, String orgTag, boolean isPublic) throws IOException, TikaException {
-        logger.info("开始流式解析文件，fileMd5: {}, userId: {}, orgTag: {}, isPublic: {}",
-                fileMd5, userId, orgTag, isPublic);
+        parseAndSave(fileMd5, fileStream, userId, orgTag, isPublic, null);
+    }
+
+    public void parseAndSave(String fileMd5, InputStream fileStream,
+                             String userId, String orgTag, boolean isPublic, String fileName)
+            throws IOException, TikaException {
+        logger.info("开始解析文件，fileMd5: {}, fileName: {}, userId: {}, orgTag: {}, isPublic: {}",
+                fileMd5, fileName, userId, orgTag, isPublic);
 
         checkMemoryThreshold();
         documentVectorRepository.deleteByFileMd5(fileMd5);
         logger.info("已清理旧文档分块，fileMd5: {}", fileMd5);
+
+        if (tabularParseService.isTabular(fileName)) {
+            String tableText = tabularParseService.extractText(fileStream, fileName);
+            parsePlainTextAndSave(fileMd5, tableText, userId, orgTag, isPublic);
+            logger.info("表格文件解析完成，fileMd5: {}", fileMd5);
+            return;
+        }
 
         try (BufferedInputStream bufferedStream = new BufferedInputStream(fileStream, bufferSize)) {
             StreamingContentHandler handler = new StreamingContentHandler(fileMd5, userId, orgTag, isPublic);
@@ -88,6 +104,32 @@ public class ParseService {
      */
     public void parseAndSave(String fileMd5, InputStream fileStream) throws IOException, TikaException {
         parseAndSave(fileMd5, fileStream, "unknown", "DEFAULT", false);
+    }
+
+    /**
+     * 将已提取的纯文本按父块/子块结构入库（表格解析等场景复用）。
+     */
+    public void parsePlainTextAndSave(String fileMd5, String text, String userId, String orgTag, boolean isPublic) {
+        if (text == null || text.isBlank()) {
+            logger.warn("纯文本为空，跳过入库，fileMd5: {}", fileMd5);
+            return;
+        }
+        int savedParentCount = 0;
+        int savedChunkCount = 0;
+        List<String> parentChunks = splitTextIntoParentChunks(text);
+        for (String parentChunk : parentChunks) {
+            if (parentChunk.isBlank()) {
+                continue;
+            }
+            savedParentCount++;
+            String parentId = fileMd5 + "_p_" + savedParentCount;
+            List<String> childChunks = splitTextIntoChunksWithSemantics(parentChunk, effectiveChildMaxChunkSize());
+            savedChunkCount = saveChildChunks(
+                    fileMd5, parentId, parentChunk, childChunks, userId, orgTag, isPublic, savedChunkCount
+            );
+        }
+        logger.info("纯文本分块入库完成，fileMd5: {}, parentCount={}, chunkCount={}",
+                fileMd5, savedParentCount, savedChunkCount);
     }
 
     private void checkMemoryThreshold() {
