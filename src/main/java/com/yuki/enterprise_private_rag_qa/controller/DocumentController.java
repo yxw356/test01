@@ -11,12 +11,14 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
+import com.yuki.enterprise_private_rag_qa.exception.CustomException;
 import com.yuki.enterprise_private_rag_qa.model.AuditAction;
 import com.yuki.enterprise_private_rag_qa.model.FileUpload;
 import com.yuki.enterprise_private_rag_qa.model.OrganizationTag;
 import com.yuki.enterprise_private_rag_qa.repository.FileUploadRepository;
 import com.yuki.enterprise_private_rag_qa.repository.OrganizationTagRepository;
 import com.yuki.enterprise_private_rag_qa.service.AuditService;
+import com.yuki.enterprise_private_rag_qa.service.DocumentIndexService;
 import com.yuki.enterprise_private_rag_qa.service.DocumentService;
 import com.yuki.enterprise_private_rag_qa.utils.AuditSupport;
 import com.yuki.enterprise_private_rag_qa.utils.JwtUtils;
@@ -54,6 +56,9 @@ public class DocumentController {
 
     @Autowired
     private AuditService auditService;
+
+    @Autowired
+    private DocumentIndexService documentIndexService;
 
     /**
      * 删除文档及其相关数据
@@ -118,6 +123,33 @@ public class DocumentController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
         }
     }
+
+    /**
+     * 重新提交索引任务（索引失败或待索引时使用）
+     */
+    @PostMapping("/{fileMd5}/reindex")
+    public ResponseEntity<?> retryIndex(
+            @PathVariable String fileMd5,
+            @RequestAttribute("userId") String userId,
+            @RequestAttribute("role") String role) {
+        try {
+            documentIndexService.retryIndexing(fileMd5, userId, role);
+            Map<String, Object> response = new HashMap<>();
+            response.put("code", 200);
+            response.put("message", "索引任务已重新提交");
+            return ResponseEntity.ok(response);
+        } catch (CustomException e) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("code", e.getStatus().value());
+            response.put("message", e.getMessage());
+            return ResponseEntity.status(e.getStatus()).body(response);
+        } catch (Exception e) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("code", HttpStatus.INTERNAL_SERVER_ERROR.value());
+            response.put("message", "重新索引失败: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+        }
+    }
     
     /**
      * 获取用户可访问的所有文件列表
@@ -142,6 +174,8 @@ public class DocumentController {
                 dto.put("fileName", file.getFileName());
                 dto.put("totalSize", file.getTotalSize());
                 dto.put("status", file.getStatus());
+                dto.put("indexStatus", file.getIndexStatus());
+                dto.put("indexError", file.getIndexError());
                 dto.put("userId", file.getUserId());
                 dto.put("public", file.isPublic());
                 dto.put("createdAt", file.getCreatedAt());
@@ -193,6 +227,8 @@ public class DocumentController {
                 dto.put("fileName", file.getFileName());
                 dto.put("totalSize", file.getTotalSize());
                 dto.put("status", file.getStatus());
+                dto.put("indexStatus", file.getIndexStatus());
+                dto.put("indexError", file.getIndexError());
                 dto.put("userId", file.getUserId());
                 dto.put("public", file.isPublic());
                 dto.put("createdAt", file.getCreatedAt());

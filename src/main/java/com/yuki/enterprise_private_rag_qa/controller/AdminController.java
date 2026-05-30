@@ -8,6 +8,7 @@ import com.yuki.enterprise_private_rag_qa.model.OrganizationTag;
 import com.yuki.enterprise_private_rag_qa.model.User;
 import com.yuki.enterprise_private_rag_qa.repository.OrganizationTagRepository;
 import com.yuki.enterprise_private_rag_qa.repository.UserRepository;
+import com.yuki.enterprise_private_rag_qa.service.ConversationService;
 import com.yuki.enterprise_private_rag_qa.service.UserService;
 import com.yuki.enterprise_private_rag_qa.utils.JwtUtils;
 import com.yuki.enterprise_private_rag_qa.utils.LogUtils;
@@ -46,6 +47,9 @@ public class AdminController {
     
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private ConversationService conversationService;
 
     /**
      * 获取所有用户列表
@@ -429,59 +433,26 @@ public class AdminController {
             User admin = validateAdmin(adminUsername);
             
             LogUtils.logBusiness("ADMIN_GET_ALL_CONVERSATIONS", adminUsername, "管理员开始查询对话历史，目标用户ID: %s, 时间范围: %s 到 %s", userid, start_date, end_date);
-            
-            List<Map<String, Object>> allConversations = new ArrayList<>();
-            
-            // 如果指定了userid，先验证用户是否存在
-            String targetUsername = null;
+
+            Long targetUserId = null;
             if (userid != null && !userid.isEmpty()) {
                 try {
-                    Long userIdLong = Long.parseLong(userid);
-                    Optional<User> targetUser = userRepository.findById(userIdLong);
-                    if (targetUser.isPresent()) {
-                        targetUsername = targetUser.get().getUsername();
-                        LogUtils.logBusiness("ADMIN_GET_ALL_CONVERSATIONS", adminUsername, "找到目标用户: ID=%s, 用户名=%s", userid, targetUsername);
-                    } else {
-                        LogUtils.logBusiness("ADMIN_GET_ALL_CONVERSATIONS", adminUsername, "目标用户ID不存在: %s", userid);
+                    targetUserId = Long.parseLong(userid);
+                    if (!userRepository.existsById(targetUserId)) {
                         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                                 .body(Map.of("code", 404, "message", "目标用户不存在"));
                     }
                 } catch (NumberFormatException e) {
-                    LogUtils.logBusiness("ADMIN_GET_ALL_CONVERSATIONS", adminUsername, "无效的用户ID格式: %s", userid);
                     return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                             .body(Map.of("code", 400, "message", "无效的用户ID格式"));
                 }
             }
-            
-            // 获取所有Redis键中以"user:"开头的键
-            Set<String> userKeys = redisTemplate.keys("user:*:current_conversation");
-            
-            if (userKeys != null && !userKeys.isEmpty()) {
-                for (String userKey : userKeys) {
-                    String conversationId = redisTemplate.opsForValue().get(userKey);
-                    if (conversationId != null) {
-                        // 提取用户ID
-                        String redisUserId = userKey.replace("user:", "").replace(":current_conversation", "");
-                        
-                        // 如果指定了userid，只查询该用户的对话
-                        if (userid != null && !userid.isEmpty()) {
-                            // 检查Redis中的用户ID是否匹配（可能是数字ID或用户名）
-                            if (!redisUserId.equals(userid) && !redisUserId.equals(targetUsername)) {
-                                continue;
-                            }
-                        }
-                        
-                        // 获取对话内容，使用实际的用户名而不是Redis中的ID
-                        String conversationKey = "conversation:" + conversationId;
-                        String json = redisTemplate.opsForValue().get(conversationKey);
-                        if (json != null) {
-                            String displayUsername = targetUsername != null ? targetUsername : redisUserId;
-                            processRedisConversation(json, allConversations, displayUsername, start_date, end_date);
-                        }
-                    }
-                }
-            }
-            
+
+            java.time.LocalDateTime startDateTime = parseDateTime(start_date);
+            java.time.LocalDateTime endDateTime = parseDateTime(end_date);
+            List<Map<String, Object>> allConversations = conversationService.getAdminConversationMessages(
+                    targetUserId, startDateTime, endDateTime);
+
             LogUtils.logBusiness("ADMIN_GET_ALL_CONVERSATIONS", adminUsername, "管理员查询完成，共获取到 %d 条对话记录", allConversations.size());
             LogUtils.logUserOperation(adminUsername, "ADMIN_GET_ALL_CONVERSATIONS", "conversation_history", "SUCCESS");
             monitor.end("管理员查询对话历史成功");

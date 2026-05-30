@@ -6,13 +6,12 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yuki.enterprise_private_rag_qa.model.Conversation;
 import com.yuki.enterprise_private_rag_qa.model.User;
 import com.yuki.enterprise_private_rag_qa.repository.ConversationRepository;
 import com.yuki.enterprise_private_rag_qa.repository.UserRepository;
-import com.yuki.enterprise_private_rag_qa.service.ConversationService;
 
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -33,6 +32,7 @@ class ConversationServiceTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
+        conversationService = new ConversationService(conversationRepository, userRepository, new ObjectMapper());
     }
 
     @Test
@@ -41,15 +41,17 @@ class ConversationServiceTest {
         user.setId(1L);
         when(userRepository.findByUsername("testuser")).thenReturn(Optional.of(user));
 
-        conversationService.recordConversation("testuser", "What is AI?", "AI stands for Artificial Intelligence.");
+        conversationService.recordConversation("testuser", "What is AI?", "AI stands for Artificial Intelligence.",
+                "session-1", List.of());
 
         verify(conversationRepository, times(1)).save(any(Conversation.class));
     }
 
     @Test
-    void testGetConversations() {
+    void testGetConversationMessages() {
         User user = new User();
         user.setId(1L);
+        user.setUsername("testuser");
         when(userRepository.findByUsername("testuser")).thenReturn(Optional.of(user));
 
         Conversation conversation = new Conversation();
@@ -58,7 +60,7 @@ class ConversationServiceTest {
         conversation.setAnswer("AI stands for Artificial Intelligence.");
         when(conversationRepository.findByUserId(1L)).thenReturn(List.of(conversation));
 
-        var result = conversationService.getConversations("testuser", null, null);
-        assertEquals(1, result.size());
+        var result = conversationService.getConversationMessages("testuser", null, null);
+        assertEquals(2, result.size());
     }
 }

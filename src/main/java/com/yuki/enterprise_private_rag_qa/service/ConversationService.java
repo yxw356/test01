@@ -1,35 +1,53 @@
 package com.yuki.enterprise_private_rag_qa.service;
 
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpStatus;
-import org.springframework.stereotype.Service;
-
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yuki.enterprise_private_rag_qa.entity.SearchResult;
 import com.yuki.enterprise_private_rag_qa.exception.CustomException;
 import com.yuki.enterprise_private_rag_qa.model.Conversation;
+import com.yuki.enterprise_private_rag_qa.model.RetrievalCitation;
 import com.yuki.enterprise_private_rag_qa.model.User;
 import com.yuki.enterprise_private_rag_qa.repository.ConversationRepository;
 import com.yuki.enterprise_private_rag_qa.repository.UserRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class ConversationService {
 
-    @Autowired
-    private ConversationRepository conversationRepository;
+    private static final Logger logger = LoggerFactory.getLogger(ConversationService.class);
+    private static final DateTimeFormatter TIMESTAMP_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
 
-    @Autowired
-    private UserRepository userRepository;
+    private final ConversationRepository conversationRepository;
+    private final UserRepository userRepository;
+    private final ObjectMapper objectMapper;
 
-    /**
-     * 记录用户的对话历史。
-     *
-     * @param username 用户名
-     * @param question 用户提问内容
-     * @param answer 系统回答内容
-     */
-    public void recordConversation(String username, String question, String answer) {
+    public ConversationService(ConversationRepository conversationRepository,
+                               UserRepository userRepository,
+                               ObjectMapper objectMapper) {
+        this.conversationRepository = conversationRepository;
+        this.userRepository = userRepository;
+        this.objectMapper = objectMapper;
+    }
+
+    @Transactional
+    public void recordConversation(String username,
+                                     String question,
+                                     String answer,
+                                     String sessionId,
+                                     List<SearchResult> retrievalResults) {
         User user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
 
@@ -37,77 +55,138 @@ public class ConversationService {
         conversation.setUser(user);
         conversation.setQuestion(question);
         conversation.setAnswer(answer);
-
+        conversation.setSessionId(sessionId);
+        conversation.setRetrievalCitations(serializeCitations(retrievalResults));
         conversationRepository.save(conversation);
+        logger.info("对话已落库: user={}, sessionId={}, citations={}",
+                username, sessionId, retrievalResults == null ? 0 : retrievalResults.size());
     }
 
-    /**
-     * 查询用户的对话历史。
-     *
-     * @param username 用户名
-     * @param startDate 起始日期（可选）
-     * @param endDate 结束日期（可选）
-     * @return 符合条件的对话记录列表
-     */
-    public List<Conversation> getConversations(String username, LocalDateTime startDate, LocalDateTime endDate) {
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> getConversationMessages(String username,
+                                                              LocalDateTime startDate,
+                                                              LocalDateTime endDate) {
         User user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
+        List<Conversation> records = queryByUser(user.getId(), startDate, endDate);
+        return toMessageList(records, null);
+    }
 
-        // 检查用户角色，如果是管理员且username参数为"all"，则返回所有对话历史
-        if (user.getRole() == User.Role.ADMIN && "all".equals(username)) {
-            if (startDate != null && endDate != null) {
-                return conversationRepository.findByTimestampBetween(startDate, endDate);
-            } else {
-                return conversationRepository.findAll();
-            }
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> getAdminConversationMessages(Long targetUserId,
+                                                                   LocalDateTime startDate,
+                                                                   LocalDateTime endDate) {
+        List<Conversation> records;
+        if (targetUserId != null) {
+            records = queryByUser(targetUserId, startDate, endDate);
+            User targetUser = userRepository.findById(targetUserId)
+                    .orElseThrow(() -> new CustomException("Target user not found", HttpStatus.NOT_FOUND));
+            return toMessageList(records, targetUser.getUsername());
+        }
+        records = queryAll(startDate, endDate);
+        return toAdminMessageList(records);
+    }
+
+    public static List<RetrievalCitation> buildCitations(List<SearchResult> results) {
+        if (results == null || results.isEmpty()) {
+            return List.of();
+        }
+        List<RetrievalCitation> citations = new ArrayList<>();
+        for (int i = 0; i < results.size(); i++) {
+            citations.add(RetrievalCitation.fromSearchResult(i + 1, results.get(i)));
+        }
+        return citations;
+    }
+
+    private List<Conversation> queryByUser(Long userId, LocalDateTime startDate, LocalDateTime endDate) {
+        List<Conversation> records;
+        if (startDate != null && endDate != null) {
+            records = conversationRepository.findByUserIdAndTimestampBetween(userId, startDate, endDate);
         } else {
-            // 普通用户只能查看自己的对话历史
-            if (startDate != null && endDate != null) {
-                return conversationRepository.findByUserIdAndTimestampBetween(
-                        user.getId(), startDate, endDate);
-            } else {
-                return conversationRepository.findByUserId(user.getId());
-            }
+            records = conversationRepository.findByUserId(userId);
+        }
+        records.sort(Comparator.comparing(Conversation::getTimestamp));
+        return records;
+    }
+
+    private List<Conversation> queryAll(LocalDateTime startDate, LocalDateTime endDate) {
+        List<Conversation> records;
+        if (startDate != null && endDate != null) {
+            records = conversationRepository.findByTimestampBetween(startDate, endDate);
+        } else {
+            records = conversationRepository.findAll();
+        }
+        records.sort(Comparator.comparing(Conversation::getTimestamp));
+        return records;
+    }
+
+    private List<Map<String, Object>> toMessageList(List<Conversation> records, String username) {
+        List<Map<String, Object>> messages = new ArrayList<>();
+        for (Conversation record : records) {
+            String timestamp = formatTimestamp(record.getTimestamp());
+            messages.add(buildMessage("user", record.getQuestion(), timestamp, null, username));
+            messages.add(buildMessage("assistant", record.getAnswer(), timestamp,
+                    parseCitations(record.getRetrievalCitations()), username));
+        }
+        return messages;
+    }
+
+    private List<Map<String, Object>> toAdminMessageList(List<Conversation> records) {
+        List<Map<String, Object>> messages = new ArrayList<>();
+        for (Conversation record : records) {
+            String username = record.getUser() != null ? record.getUser().getUsername() : "unknown";
+            String timestamp = formatTimestamp(record.getTimestamp());
+            messages.add(buildMessage("user", record.getQuestion(), timestamp, null, username));
+            messages.add(buildMessage("assistant", record.getAnswer(), timestamp,
+                    parseCitations(record.getRetrievalCitations()), username));
+        }
+        return messages;
+    }
+
+    private Map<String, Object> buildMessage(String role,
+                                             String content,
+                                             String timestamp,
+                                             List<RetrievalCitation> citations,
+                                             String username) {
+        Map<String, Object> message = new HashMap<>();
+        message.put("role", role);
+        message.put("content", content);
+        message.put("timestamp", timestamp);
+        if (username != null) {
+            message.put("username", username);
+        }
+        if (citations != null && !citations.isEmpty()) {
+            message.put("citations", citations);
+        }
+        return message;
+    }
+
+    private String serializeCitations(List<SearchResult> retrievalResults) {
+        List<RetrievalCitation> citations = buildCitations(retrievalResults);
+        if (citations.isEmpty()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(citations);
+        } catch (JsonProcessingException e) {
+            logger.warn("序列化检索引用失败: {}", e.getMessage());
+            return null;
         }
     }
-    
-    /**
-     * 管理员查询所有用户的对话历史。
-     *
-     * @param adminUsername 管理员用户名
-     * @param targetUsername 目标用户名（可选，如果提供则只查询该用户的对话历史）
-     * @param startDate 起始日期（可选）
-     * @param endDate 结束日期（可选）
-     * @return 符合条件的对话记录列表
-     */
-    public List<Conversation> getAllConversations(String adminUsername, String targetUsername, 
-                                                 LocalDateTime startDate, LocalDateTime endDate) {
-        User admin = userRepository.findByUsername(adminUsername)
-                .orElseThrow(() -> new CustomException("Admin not found", HttpStatus.NOT_FOUND));
-        
-        // 验证用户是否为管理员
-        if (admin.getRole() != User.Role.ADMIN) {
-            throw new CustomException("Unauthorized access", HttpStatus.FORBIDDEN);
+
+    private List<RetrievalCitation> parseCitations(String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
         }
-        
-        // 如果指定了目标用户，则只查询该用户的对话历史
-        if (targetUsername != null && !targetUsername.isEmpty()) {
-            User targetUser = userRepository.findByUsername(targetUsername)
-                    .orElseThrow(() -> new CustomException("Target user not found", HttpStatus.NOT_FOUND));
-            
-            if (startDate != null && endDate != null) {
-                return conversationRepository.findByUserIdAndTimestampBetween(
-                        targetUser.getId(), startDate, endDate);
-            } else {
-                return conversationRepository.findByUserId(targetUser.getId());
-            }
-        } else {
-            // 否则查询所有用户的对话历史
-            if (startDate != null && endDate != null) {
-                return conversationRepository.findByTimestampBetween(startDate, endDate);
-            } else {
-                return conversationRepository.findAll();
-            }
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<RetrievalCitation>>() {});
+        } catch (JsonProcessingException e) {
+            logger.warn("解析检索引用失败: {}", e.getMessage());
+            return List.of();
         }
+    }
+
+    private String formatTimestamp(LocalDateTime timestamp) {
+        return timestamp == null ? "未知时间" : timestamp.format(TIMESTAMP_FORMAT);
     }
 }

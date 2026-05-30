@@ -74,3 +74,20 @@ CREATE TABLE audit_log (
     INDEX idx_audit_action (action),
     INDEX idx_audit_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='审计日志表';
+
+CREATE TABLE conversations (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '对话记录ID',
+    user_id BIGINT NOT NULL COMMENT '用户ID',
+    question TEXT NOT NULL COMMENT '用户提问',
+    answer TEXT NOT NULL COMMENT '系统回答',
+    session_id VARCHAR(64) DEFAULT NULL COMMENT 'Redis会话ID',
+    retrieval_citations TEXT DEFAULT NULL COMMENT '结构化检索引用JSON',
+    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '对话时间',
+    INDEX idx_user_id (user_id),
+    INDEX idx_timestamp (timestamp),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='对话历史表';
+
+ALTER TABLE file_upload
+    ADD COLUMN index_status TINYINT NOT NULL DEFAULT 2 COMMENT '0待索引 1索引中 2已索引 3失败' AFTER status,
+    ADD COLUMN index_error VARCHAR(512) DEFAULT NULL COMMENT '索引失败原因' AFTER index_status;

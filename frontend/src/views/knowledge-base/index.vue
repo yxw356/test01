@@ -1,9 +1,9 @@
 <script setup lang="tsx">
 import type { UploadFileInfo } from 'naive-ui';
-import { NButton, NEllipsis, NModal, NPopconfirm, NProgress, NTag, NUpload } from 'naive-ui';
+import { NButton, NEllipsis, NModal, NPopconfirm, NProgress, NTag, NTooltip, NUpload } from 'naive-ui';
 import { uploadAccept } from '@/constants/common';
 import { fakePaginationRequest } from '@/service/request';
-import { UploadStatus } from '@/enum';
+import { UploadStatus, IndexStatus } from '@/enum';
 import SvgIcon from '@/components/custom/svg-icon.vue';
 import FilePreview from '@/components/custom/file-preview.vue';
 import UploadDialog from './modules/upload-dialog.vue';
@@ -75,6 +75,12 @@ const { columns, columnChecks, data, getData, loading } = useTable({
       render: row => renderStatus(row.status, row.progress)
     },
     {
+      key: 'indexStatus',
+      title: '索引状态',
+      width: 110,
+      render: row => renderIndexStatus(row)
+    },
+    {
       key: 'orgTagName',
       title: '组织标签',
       width: 150,
@@ -95,10 +101,11 @@ const { columns, columnChecks, data, getData, loading } = useTable({
     {
       key: 'operate',
       title: '操作',
-      width: 180,
+      width: 240,
       render: row => (
-        <div class="flex gap-4">
+        <div class="flex flex-wrap gap-4">
           {renderResumeUploadButton(row)}
+          {renderReindexButton(row)}
           <NButton type="primary" ghost size="small" onClick={() => handleFilePreview(row.fileName)}>
             预览
           </NButton>
@@ -126,9 +133,34 @@ const completedCount = computed(() => tasks.value.filter(item => item.status ===
 const privateCount = computed(() => tasks.value.filter(item => !(item.public || item.isPublic)).length);
 const processingCount = computed(() => tasks.value.filter(item => item.status !== UploadStatus.Completed).length);
 
+const indexedCount = computed(() =>
+  tasks.value.filter(item => item.indexStatus === IndexStatus.Indexed || item.indexStatus === undefined).length
+);
+const indexPendingCount = computed(() =>
+  tasks.value.filter(item =>
+    [IndexStatus.Pending, IndexStatus.Indexing].includes(item.indexStatus as IndexStatus)
+  ).length
+);
+
+let indexPollTimer: ReturnType<typeof setInterval> | null = null;
+
 onMounted(async () => {
   await getList();
+  startIndexPolling();
 });
+
+onUnmounted(() => {
+  if (indexPollTimer) clearInterval(indexPollTimer);
+});
+
+function startIndexPolling() {
+  if (indexPollTimer) clearInterval(indexPollTimer);
+  indexPollTimer = setInterval(async () => {
+    if (indexPendingCount.value > 0) {
+      await getList();
+    }
+  }, 5000);
+}
 
 /** 异步获取列表函数 该函数主要用于更新或初始化上传任务列表 它首先调用getData函数获取数据，然后根据获取到的数据状态更新任务列表 */
 async function getList() {
@@ -149,6 +181,8 @@ async function getList() {
       // 如果找到匹配项，则更新其状态
       if (index !== -1) {
         tasks.value[index].status = UploadStatus.Completed;
+        tasks.value[index].indexStatus = item.indexStatus;
+        tasks.value[index].indexError = item.indexError;
       } else {
         // 如果没有找到匹配项，则将该项目添加到任务列表中
         tasks.value.push(item);
@@ -203,6 +237,54 @@ function renderStatus(status: UploadStatus, percentage: number) {
   if (status === UploadStatus.Completed) return <NTag type="success">已完成</NTag>;
   else if (status === UploadStatus.Break) return <NTag type="error">上传中断</NTag>;
   return <NProgress percentage={percentage} processing />;
+}
+
+function renderIndexStatus(row: Api.KnowledgeBase.UploadTask) {
+  if (row.status !== UploadStatus.Completed) {
+    return <NTag bordered={false}>-</NTag>;
+  }
+  const status = row.indexStatus ?? IndexStatus.Indexed;
+  if (status === IndexStatus.Pending) {
+    return <NTag type="warning">待索引</NTag>;
+  }
+  if (status === IndexStatus.Indexing) {
+    return <NTag type="info">索引中</NTag>;
+  }
+  if (status === IndexStatus.Failed) {
+    return (
+      <NTooltip trigger="hover">
+        {{
+          trigger: () => <NTag type="error">索引失败</NTag>,
+          default: () => row.indexError || '请查看后端日志或重新上传'
+        }}
+      </NTooltip>
+    );
+  }
+  return <NTag type="success">可检索</NTag>;
+}
+
+function renderReindexButton(row: Api.KnowledgeBase.UploadTask) {
+  if (row.status !== UploadStatus.Completed) return null;
+  const indexStatus = row.indexStatus ?? IndexStatus.Indexed;
+  if (indexStatus !== IndexStatus.Failed && indexStatus !== IndexStatus.Pending && indexStatus !== IndexStatus.Indexing) {
+    return null;
+  }
+  return (
+    <NButton type="warning" ghost size="small" onClick={() => handleReindex(row.fileMd5)}>
+      重试索引
+    </NButton>
+  );
+}
+
+async function handleReindex(fileMd5: string) {
+  const { error } = await request({
+    url: `/documents/${fileMd5}/reindex`,
+    method: 'POST'
+  });
+  if (!error) {
+    window.$message?.success('索引任务已重新提交');
+    await getList();
+  }
 }
 
 // #region 文件续传
@@ -282,8 +364,8 @@ async function onBeforeUpload(
           <icon-solar:check-circle-bold-duotone />
         </span>
         <div>
-          <p>已入库</p>
-          <strong>{{ completedCount }}</strong>
+          <p>可检索</p>
+          <strong>{{ indexedCount }}</strong>
         </div>
       </div>
       <div class="overview-card">
@@ -300,8 +382,8 @@ async function onBeforeUpload(
           <icon-solar:refresh-circle-bold-duotone />
         </span>
         <div>
-          <p>处理中</p>
-          <strong>{{ processingCount }}</strong>
+          <p>索引中</p>
+          <strong>{{ indexPendingCount }}</strong>
         </div>
       </div>
     </div>

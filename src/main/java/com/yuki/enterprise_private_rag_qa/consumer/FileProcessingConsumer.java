@@ -11,6 +11,7 @@ import com.yuki.enterprise_private_rag_qa.config.KafkaConfig;
 import com.yuki.enterprise_private_rag_qa.model.FileProcessingTask;
 import com.yuki.enterprise_private_rag_qa.model.AuditAction;
 import com.yuki.enterprise_private_rag_qa.service.AuditService;
+import com.yuki.enterprise_private_rag_qa.service.FileIndexStatusService;
 import com.yuki.enterprise_private_rag_qa.service.OperationMetricsService;
 import com.yuki.enterprise_private_rag_qa.service.ParseService;
 import com.yuki.enterprise_private_rag_qa.service.VectorizationService;
@@ -29,6 +30,7 @@ public class FileProcessingConsumer {
     private final VectorizationService vectorizationService;
     private final OperationMetricsService operationMetricsService;
     private final AuditService auditService;
+    private final FileIndexStatusService fileIndexStatusService;
     @Autowired
     private KafkaConfig kafkaConfig;
 
@@ -36,11 +38,13 @@ public class FileProcessingConsumer {
     public FileProcessingConsumer(ParseService parseService,
                                   VectorizationService vectorizationService,
                                   OperationMetricsService operationMetricsService,
-                                  AuditService auditService) {
+                                  AuditService auditService,
+                                  FileIndexStatusService fileIndexStatusService) {
         this.parseService = parseService;
         this.vectorizationService = vectorizationService;
         this.operationMetricsService = operationMetricsService;
         this.auditService = auditService;
+        this.fileIndexStatusService = fileIndexStatusService;
     }
 
     @KafkaListener(topics = "#{kafkaConfig.getFileProcessingTopic()}", groupId = "#{kafkaConfig.getFileProcessingGroupId()}")
@@ -51,6 +55,8 @@ public class FileProcessingConsumer {
                 
         InputStream fileStream = null;
         try {
+            fileIndexStatusService.markIndexing(task.getFileMd5(), task.getUserId());
+
             // 下载文件
             fileStream = downloadFileFromStorage(task.getFilePath());
             // 在 downloadFileFromStorage 返回后立即检查流是否可读
@@ -72,6 +78,7 @@ public class FileProcessingConsumer {
             vectorizationService.vectorize(task.getFileMd5(), 
                     task.getUserId(), task.getOrgTag(), task.isPublic());
             log.info("向量化完成，fileMd5: {}", task.getFileMd5());
+            fileIndexStatusService.markIndexed(task.getFileMd5(), task.getUserId());
             operationMetricsService.recordIndexSuccess();
             auditService.recordSuccess(
                     task.getUserId(), null, AuditAction.INDEX_SUCCESS, "document",
@@ -79,6 +86,7 @@ public class FileProcessingConsumer {
             );
         } catch (Exception e) {
             log.error("Error processing task: {}", task, e);
+            fileIndexStatusService.markFailed(task.getFileMd5(), task.getUserId(), e.getMessage());
             operationMetricsService.recordIndexFailure(e.getMessage());
             auditService.recordFailure(
                     task.getUserId(), null, AuditAction.INDEX_FAILURE, "document",

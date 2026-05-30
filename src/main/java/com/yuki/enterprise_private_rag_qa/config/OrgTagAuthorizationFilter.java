@@ -63,7 +63,8 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
                 path.matches(".*/documents/uploads.*") ||
                 path.matches(".*/documents/accessible.*") ||
                 path.matches(".*/search/hybrid.*") ||
-                (path.matches(".*/documents/[a-fA-F0-9]{32}.*") && "DELETE".equals(request.getMethod()))) {
+                (path.matches(".*/documents/[a-fA-F0-9]{32}(/reindex)?.*")
+                        && ("DELETE".equals(request.getMethod()) || "POST".equals(request.getMethod())))) {
                 
                 String operation = "未知操作";
                 if (path.contains("/chunk")) {
@@ -78,6 +79,8 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
                     operation = "混合检索";
                 } else if ("DELETE".equals(request.getMethod()) && path.matches(".*/documents/[a-fA-F0-9]{32}.*")) {
                     operation = "删除文档";
+                } else if ("POST".equals(request.getMethod()) && path.contains("/reindex")) {
+                    operation = "重新索引";
                 }
                 
                 logger.info("处理{}请求: {}", operation, path);

@@ -20,11 +20,15 @@ declare module "@elegant-router/types" {
     "403": "/403";
     "404": "/404";
     "500": "/500";
+    "admin-audit": "/admin-audit";
+    "admin-monitoring": "/admin-monitoring";
     "chat": "/chat";
     "chat-history": "/chat-history";
     "iframe-page": "/iframe-page/:url";
     "knowledge-base": "/knowledge-base";
     "login": "/login/:module(pwd-login|code-login|register|reset-pwd|bind-wechat)?";
+    "admin-audit": "/admin-audit";
+    "admin-monitoring": "/admin-monitoring";
     "org-tag": "/org-tag";
     "personal-center": "/personal-center";
     "user": "/user";
@@ -62,6 +66,8 @@ declare module "@elegant-router/types" {
     | "403"
     | "404"
     | "500"
+    | "admin-audit"
+    | "admin-monitoring"
     | "chat"
     | "chat-history"
     | "iframe-page"
@@ -91,6 +97,8 @@ declare module "@elegant-router/types" {
     | "500"
     | "iframe-page"
     | "login"
+    | "admin-audit"
+    | "admin-monitoring"
     | "chat-history"
     | "chat"
     | "knowledge-base"

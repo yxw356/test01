@@ -45,6 +45,18 @@ public class FileUpload {
     private int status; // 0-上传中 1-已完成
 
     /**
+     * 索引状态：0待索引 1索引中 2已索引 3失败（默认2兼容历史数据）
+     */
+    @Column(name = "index_status", nullable = false)
+    private int indexStatus = FileIndexStatus.INDEXED;
+
+    /**
+     * 索引失败时的错误摘要
+     */
+    @Column(name = "index_error", length = 512)
+    private String indexError;
+
+    /**
      * 上传文件的用户的标识符
      * 用于记录哪个用户上传了文件
      */

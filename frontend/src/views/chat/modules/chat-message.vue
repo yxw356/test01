@@ -3,6 +3,7 @@
 import { nextTick } from 'vue';
 import { VueMarkdownIt } from 'vue-markdown-shiki';
 import { formatDate } from '@/utils/common';
+import FilePreview from '@/components/custom/file-preview.vue';
 defineOptions({ name: 'ChatMessage' });
 
 const props = defineProps<{ msg: Api.Chat.Message }>();
@@ -15,6 +16,9 @@ function handleCopy(content: string) {
 }
 
 const chatStore = useChatStore();
+
+const previewVisible = ref(false);
+const previewFileName = ref('');
 
 // 存储文件名和对应的事件处理
 const sourceFiles = ref<Array<{fileName: string, id: string}>>([]);
@@ -73,45 +77,13 @@ function handleContentClick(event: MouseEvent) {
 }
 
 // 处理来源文件点击事件
+function openFilePreview(fileName: string) {
+  previewFileName.value = decodeURIComponent(fileName);
+  previewVisible.value = true;
+}
+
 async function handleSourceFileClick(fileName: string) {
-  const decodedFileName = decodeURIComponent(fileName);
-  console.log('点击了来源文件:', decodedFileName);
-
-  try {
-    window.$message?.loading(`正在获取文件下载链接: ${decodedFileName}`, {
-      duration: 0,
-      closable: false
-    });
-
-    // 调用文件下载接口
-    const { error, data } = await request<Api.Document.DownloadResponse>({
-      url: 'documents/download',
-      params: {
-        fileName: decodedFileName,
-        token: authStore.token
-      },
-      baseURL: '/proxy-api'
-    });
-
-    window.$message?.destroyAll();
-
-    if (error) {
-      window.$message?.error(`文件下载失败: ${error.response?.data?.message || '未知错误'}`);
-      return;
-    }
-
-    if (data?.downloadUrl) {
-      // 在新窗口打开下载链接
-      window.open(data.downloadUrl, '_blank');
-      window.$message?.success(`文件下载链接已打开: ${decodedFileName}`);
-    } else {
-      window.$message?.error('未能获取到下载链接');
-    }
-  } catch (err) {
-    window.$message?.destroyAll();
-    console.error('文件下载失败:', err);
-    window.$message?.error(`文件下载失败: ${decodedFileName}`);
-  }
+  openFilePreview(fileName);
 }
 </script>
 
@@ -143,6 +115,24 @@ async function handleSourceFileClick(fileName: string) {
       <div class="assistant-message-card">
         <VueMarkdownIt :content="content" />
       </div>
+      <div v-if="msg.citations?.length" class="citations-panel mt-3">
+        <NText depth="3" class="mb-2 block text-13px">参考来源（{{ msg.citations.length }}）</NText>
+        <div
+          v-for="citation in msg.citations"
+          :key="citation.index"
+          class="citation-item"
+          @click.stop="citation.fileName && openFilePreview(citation.fileName)"
+        >
+          <div class="citation-title">
+            <span class="citation-index">#{{ citation.index }}</span>
+            <span class="citation-name">{{ citation.fileName || '未知文件' }}</span>
+            <NTag v-if="citation.score != null" size="small" :bordered="false" type="info">
+              {{ citation.score.toFixed(3) }}
+            </NTag>
+          </div>
+          <p v-if="citation.snippet" class="citation-snippet">{{ citation.snippet }}</p>
+        </div>
+      </div>
     </div>
     <div v-else-if="msg.role === 'user'" class="user-message-card ml-12 mt-2 text-4">{{ content }}</div>
     <NDivider class="message-divider ml-12 w-[calc(100%-3rem)] mb-0! mt-2!" />
@@ -153,6 +143,7 @@ async function handleSourceFileClick(fileName: string) {
         </template>
       </NButton>
     </div>
+    <FilePreview v-model:visible="previewVisible" :file-name="previewFileName" />
   </div>
 </template>
 
@@ -264,6 +255,53 @@ async function handleSourceFileClick(fileName: string) {
   &:active {
     color: rgb(var(--primary-700-color));
   }
+}
+
+.citations-panel {
+  max-width: min(100%, 60rem);
+}
+
+.citation-item {
+  border: 1px solid rgb(15 23 42 / 0.08);
+  border-radius: 8px;
+  background: rgb(var(--container-bg-color));
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+
+  &:hover {
+    border-color: rgb(var(--primary-color) / 0.35);
+  }
+}
+
+.citation-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.citation-index {
+  color: rgb(var(--primary-color));
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.citation-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.citation-snippet {
+  margin: 8px 0 0;
+  color: rgb(var(--base-text-color) / 0.62);
+  font-size: 12px;
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 :deep(.message-divider.n-divider) {

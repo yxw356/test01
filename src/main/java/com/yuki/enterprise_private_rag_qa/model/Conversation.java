@@ -28,6 +28,14 @@ public class Conversation {
     @Column(nullable = false, columnDefinition = "TEXT")
     private String answer; // 系统回答内容
 
+    /** Redis 会话 ID，便于关联多轮上下文 */
+    @Column(name = "session_id", length = 64)
+    private String sessionId;
+
+    /** 结构化检索引用 JSON */
+    @Column(name = "retrieval_citations", columnDefinition = "TEXT")
+    private String retrievalCitations;
+
     @CreationTimestamp
     private LocalDateTime timestamp; // 对话时间戳
 }

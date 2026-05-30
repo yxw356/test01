@@ -40,6 +40,24 @@ export const generatedRoutes: GeneratedRoute[] = [
     }
   },
   {
+    name: 'admin-audit',
+    path: '/admin-audit',
+    component: 'layout.base$view.admin-audit',
+    meta: {
+      title: 'admin-audit',
+      i18nKey: 'route.admin-audit'
+    }
+  },
+  {
+    name: 'admin-monitoring',
+    path: '/admin-monitoring',
+    component: 'layout.base$view.admin-monitoring',
+    meta: {
+      title: 'admin-monitoring',
+      i18nKey: 'route.admin-monitoring'
+    }
+  },
+  {
     name: 'chat',
     path: '/chat',
     component: 'layout.base$view.chat',
@@ -96,6 +114,30 @@ export const generatedRoutes: GeneratedRoute[] = [
       i18nKey: 'route.login',
       constant: true,
       hideInMenu: true
+    }
+  },
+  {
+    name: 'admin-audit',
+    path: '/admin-audit',
+    component: 'layout.base$view.admin-audit',
+    meta: {
+      title: 'admin-audit',
+      i18nKey: 'route.admin-audit',
+      roles: ['ADMIN'],
+      icon: 'solar:clipboard-list-line-duotone',
+      order: 7
+    }
+  },
+  {
+    name: 'admin-monitoring',
+    path: '/admin-monitoring',
+    component: 'layout.base$view.admin-monitoring',
+    meta: {
+      title: 'admin-monitoring',
+      i18nKey: 'route.admin-monitoring',
+      roles: ['ADMIN'],
+      icon: 'solar:monitor-line-duotone',
+      order: 8
     }
   },
   {

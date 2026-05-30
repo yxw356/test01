@@ -14,3 +14,11 @@ export enum UploadStatus {
   Paused = 3,
   Break = 4
 }
+
+/** 与后端 FileIndexStatus 一致 */
+export enum IndexStatus {
+  Pending = 0,
+  Indexing = 1,
+  Indexed = 2,
+  Failed = 3
+}

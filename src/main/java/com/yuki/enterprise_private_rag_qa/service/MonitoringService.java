@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -67,23 +68,31 @@ public class MonitoringService {
     public Map<String, Object> collectStatus() {
         Map<String, Object> status = new LinkedHashMap<>();
         status.put("timestamp", java.time.Instant.now().toString());
-        status.put("components", Map.of(
-                "redis", checkRedis(),
-                "elasticsearch", checkElasticsearch(),
-                "vllmChat", checkHttpEndpoint(llmApiUrl + "/models", llmApiKey),
-                "vllmEmbedding", checkHttpEndpoint(embeddingApiUrl + "/models", embeddingApiKey),
-                "kafka", checkKafkaLag()
-        ));
-        status.put("metrics", Map.of(
-                "indexSuccessCount", metricsService.getIndexSuccessCount(),
-                "indexFailureCount", metricsService.getIndexFailureCount(),
-                "lastIndexFailureMessage", metricsService.getLastIndexFailureMessage(),
-                "lastIndexFailureAt", metricsService.getLastIndexFailureAt(),
-                "chatRequestCount", metricsService.getChatRequestCount(),
-                "chatAverageDurationMs", metricsService.getChatAverageDurationMs(),
-                "chatP95EstimateMs", metricsService.getChatP95EstimateMs()
-        ));
+
+        Map<String, Object> components = new LinkedHashMap<>();
+        components.put("redis", checkRedis());
+        components.put("elasticsearch", checkElasticsearch());
+        components.put("vllmChat", checkHttpEndpoint(llmApiUrl + "/models", llmApiKey));
+        components.put("vllmEmbedding", checkHttpEndpoint(embeddingApiUrl + "/models", embeddingApiKey));
+        components.put("kafka", checkKafkaLag());
+        status.put("components", components);
+
+        Instant lastFailureAt = metricsService.getLastIndexFailureAt();
+        Map<String, Object> metrics = new LinkedHashMap<>();
+        metrics.put("indexSuccessCount", metricsService.getIndexSuccessCount());
+        metrics.put("indexFailureCount", metricsService.getIndexFailureCount());
+        metrics.put("lastIndexFailureMessage", nullToEmpty(metricsService.getLastIndexFailureMessage()));
+        metrics.put("lastIndexFailureAt", lastFailureAt != null ? lastFailureAt.toString() : "");
+        metrics.put("chatRequestCount", metricsService.getChatRequestCount());
+        metrics.put("chatAverageDurationMs", metricsService.getChatAverageDurationMs());
+        metrics.put("chatP95EstimateMs", metricsService.getChatP95EstimateMs());
+        status.put("metrics", metrics);
+
         return status;
+    }
+
+    private static String nullToEmpty(String value) {
+        return value != null ? value : "";
     }
 
     private Map<String, Object> checkRedis() {
@@ -94,7 +103,7 @@ public class MonitoringService {
             result.put("detail", pong);
         } catch (Exception e) {
             result.put("status", "DOWN");
-            result.put("detail", e.getMessage());
+            result.put("detail", nullToEmpty(e.getMessage()));
         }
         return result;
     }
@@ -109,7 +118,7 @@ public class MonitoringService {
             result.put("knowledgeBaseCount", count);
         } catch (Exception e) {
             result.put("status", "DOWN");
-            result.put("detail", e.getMessage());
+            result.put("detail", nullToEmpty(e.getMessage()));
         }
         return result;
     }
@@ -125,10 +134,10 @@ public class MonitoringService {
                     .bodyToMono(String.class)
                     .block(Duration.ofSeconds(5));
             result.put("status", "UP");
-            result.put("detail", body != null && body.length() > 120 ? body.substring(0, 120) + "..." : body);
+            result.put("detail", body != null && body.length() > 120 ? body.substring(0, 120) + "..." : nullToEmpty(body));
         } catch (Exception e) {
             result.put("status", "DOWN");
-            result.put("detail", e.getMessage());
+            result.put("detail", nullToEmpty(e.getMessage()));
         }
         return result;
     }
@@ -168,7 +177,7 @@ public class MonitoringService {
         } catch (Exception e) {
             logger.debug("Kafka lag 检查失败: {}", e.getMessage());
             result.put("status", "UNKNOWN");
-            result.put("detail", e.getMessage());
+            result.put("detail", nullToEmpty(e.getMessage()));
         }
         return result;
     }

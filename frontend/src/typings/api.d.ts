@@ -149,6 +149,8 @@ declare namespace Api {
       status: UploadStatus;
       createdAt?: string;
       mergedAt?: string;
+      indexStatus?: number;
+      indexError?: string | null;
       requestIds?: string[]; // 请求ID，用于取消上传
     }
     type List = Common.PaginatingQueryRecord<UploadTask>;
@@ -186,6 +188,17 @@ declare namespace Api {
       content: string;
       status?: 'pending' | 'loading' | 'finished' | 'error';
       timestamp?: string;
+      citations?: RetrievalCitation[];
+    }
+
+    interface RetrievalCitation {
+      index: number;
+      fileMd5?: string;
+      fileName?: string;
+      chunkId?: number;
+      parentId?: string;
+      score?: number;
+      snippet?: string;
     }
 
     interface Token {
@@ -198,6 +211,50 @@ declare namespace Api {
       fileName: string;
       downloadUrl: string;
       fileSize: number;
+    }
+  }
+
+  namespace Admin {
+    interface AuditLog {
+      id: number;
+      userId?: string;
+      username?: string;
+      action: string;
+      resourceType?: string;
+      resourceId?: string;
+      detail?: string;
+      result?: string;
+      clientIp?: string;
+      durationMs?: number;
+      createdAt: string;
+    }
+
+    interface ComponentStatus {
+      status?: string;
+      detail?: string;
+      knowledgeBaseCount?: number;
+      totalLag?: number;
+      clusterStatus?: string;
+    }
+
+    interface MonitoringStatus {
+      timestamp?: string;
+      components?: {
+        redis?: ComponentStatus;
+        elasticsearch?: ComponentStatus;
+        vllmChat?: ComponentStatus;
+        vllmEmbedding?: ComponentStatus;
+        kafka?: ComponentStatus;
+      };
+      metrics?: {
+        indexSuccessCount?: number;
+        indexFailureCount?: number;
+        lastIndexFailureMessage?: string;
+        lastIndexFailureAt?: string;
+        chatRequestCount?: number;
+        chatAverageDurationMs?: number;
+        chatP95EstimateMs?: number;
+      };
     }
   }
 }

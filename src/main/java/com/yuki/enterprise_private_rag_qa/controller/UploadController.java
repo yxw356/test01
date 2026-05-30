@@ -13,6 +13,7 @@ import com.yuki.enterprise_private_rag_qa.model.FileProcessingTask;
 import com.yuki.enterprise_private_rag_qa.model.FileUpload;
 import com.yuki.enterprise_private_rag_qa.repository.FileUploadRepository;
 import com.yuki.enterprise_private_rag_qa.service.AuditService;
+import com.yuki.enterprise_private_rag_qa.service.FileIndexStatusService;
 import com.yuki.enterprise_private_rag_qa.service.FileTypeValidationService;
 import com.yuki.enterprise_private_rag_qa.service.UploadService;
 import com.yuki.enterprise_private_rag_qa.service.UserService;
@@ -54,6 +55,9 @@ public class UploadController {
 
     @Autowired
     private AuditService auditService;
+
+    @Autowired
+    private FileIndexStatusService fileIndexStatusService;
 
     public UploadController(UploadService uploadService, KafkaTemplate<String, Object> kafkaTemplate) {
         this.uploadService = uploadService;
@@ -308,6 +312,7 @@ public class UploadController {
                 return true;
             });
             LogUtils.logBusiness("MERGE_FILE", userId, "文件处理任务已发送: fileMd5=%s, fileName=%s, fileType=%s", request.fileMd5(), request.fileName(), fileType);
+            fileIndexStatusService.markPending(request.fileMd5(), userId);
 
             // 构建数据对象
             Map<String, Object> data = new HashMap<>();

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yuki.enterprise_private_rag_qa.client.DeepSeekClient;
 import com.yuki.enterprise_private_rag_qa.entity.SearchResult;
 import com.yuki.enterprise_private_rag_qa.model.AuditAction;
+import com.yuki.enterprise_private_rag_qa.model.RetrievalCitation;
 import com.yuki.enterprise_private_rag_qa.service.rag.RagPipeline;
 import com.yuki.enterprise_private_rag_qa.utils.AuditSupport;
 
@@ -42,9 +43,12 @@ public class ChatHandler {
     private final ObjectMapper objectMapper;
     private final AuditService auditService;
     private final OperationMetricsService operationMetricsService;
+    private final ConversationService conversationService;
     
     // 用于存储每个会话的完整响应
     private final Map<String, StringBuilder> responseBuilders = new ConcurrentHashMap<>();
+    // 当前轮次检索结果，供落库与前端引用展示
+    private final Map<String, List<SearchResult>> sessionRetrievalResults = new ConcurrentHashMap<>();
     // 用于取消每个会话正在进行的 LLM 流式请求
     private final Map<String, Disposable> activeStreams = new ConcurrentHashMap<>();
     // 用于停止时保存已生成的部分回答
@@ -58,13 +62,15 @@ public class ChatHandler {
                       DeepSeekClient deepSeekClient,
                       RagPipeline ragPipeline,
                       AuditService auditService,
-                      OperationMetricsService operationMetricsService) {
+                      OperationMetricsService operationMetricsService,
+                      ConversationService conversationService) {
         this.redisTemplate = redisTemplate;
         this.searchService = searchService;
         this.deepSeekClient = deepSeekClient;
         this.ragPipeline = ragPipeline;
         this.auditService = auditService;
         this.operationMetricsService = operationMetricsService;
+        this.conversationService = conversationService;
         this.objectMapper = new ObjectMapper();
     }
 
@@ -104,6 +110,7 @@ public class ChatHandler {
 
             // 5. 构建上下文
             String context = buildContext(ragResult.finalDocs());
+            sessionRetrievalResults.put(sessionId, ragResult.finalDocs());
             logger.info("RAG context built, contextLength: {}", context.length());
 
             // 6. 调用 DeepSeek API 并处理流式响应
@@ -132,7 +139,7 @@ public class ChatHandler {
                     }
                     handleError(session, error);
                     // 发送响应完成通知（错误情况）
-                    sendCompletionNotification(session);
+                    sendCompletionNotification(session, List.of());
                     // 清理会话响应构建器
                     responseBuilders.remove(sessionId);
                 },
@@ -173,10 +180,11 @@ public class ChatHandler {
             operationMetricsService.recordChatDuration(System.currentTimeMillis() - startedAt);
         }
 
-        sendCompletionNotification(session);
+        List<SearchResult> retrievalResults = sessionRetrievalResults.remove(sessionId);
+        sendCompletionNotification(session, retrievalResults);
 
         if (!completeResponse.isBlank()) {
-            updateConversationHistory(conversationId, userMessage, completeResponse);
+            persistConversationTurn(userId, conversationId, userMessage, completeResponse, retrievalResults);
             String redisKey = "user:" + userId + ":current_conversation";
             logger.info("对话存储信息 - Redis键: {}, 值: {}", redisKey, conversationId);
         } else {
@@ -194,6 +202,7 @@ public class ChatHandler {
         }
         activeResponses.remove(sessionId);
         responseBuilders.remove(sessionId);
+        sessionRetrievalResults.remove(sessionId);
     }
 
     private String getOrCreateConversationId(String userId) {
@@ -250,25 +259,48 @@ public class ChatHandler {
         return sb.toString();
     }
 
-    private void updateConversationHistory(String conversationId, String userMessage, String response) {
+    private void persistConversationTurn(String userId,
+                                         String conversationId,
+                                         String userMessage,
+                                         String response,
+                                         List<SearchResult> retrievalResults) {
+        List<RetrievalCitation> citations = ConversationService.buildCitations(
+                retrievalResults == null ? List.of() : retrievalResults);
+        updateConversationHistory(conversationId, userMessage, response, citations);
+        try {
+            conversationService.recordConversation(
+                    userId, userMessage, response, conversationId, retrievalResults);
+        } catch (Exception e) {
+            logger.error("对话落库失败，用户ID: {}, 会话ID: {}, 错误: {}", userId, conversationId, e.getMessage(), e);
+        }
+    }
+
+    private void updateConversationHistory(String conversationId,
+                                           String userMessage,
+                                           String response,
+                                           List<RetrievalCitation> citations) {
         String key = "conversation:" + conversationId;
         List<Map<String, String>> history = getConversationHistory(conversationId);
         
-        // 获取当前时间戳
         String currentTimestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"));
         
-        // 添加用户消息（带时间戳）
         Map<String, String> userMsgMap = new HashMap<>();
         userMsgMap.put("role", "user");
         userMsgMap.put("content", userMessage);
         userMsgMap.put("timestamp", currentTimestamp);
         history.add(userMsgMap);
         
-        // 添加助手回复（带时间戳）
         Map<String, String> assistantMsgMap = new HashMap<>();
         assistantMsgMap.put("role", "assistant");
         assistantMsgMap.put("content", response);
         assistantMsgMap.put("timestamp", currentTimestamp);
+        if (citations != null && !citations.isEmpty()) {
+            try {
+                assistantMsgMap.put("citations", objectMapper.writeValueAsString(citations));
+            } catch (JsonProcessingException e) {
+                logger.warn("Redis 会话引用序列化失败: {}", e.getMessage());
+            }
+        }
         history.add(assistantMsgMap);
         
         // 限制历史记录长度，保留最近的20条消息
@@ -322,16 +354,20 @@ public class ChatHandler {
         }
     }
 
-    private void sendCompletionNotification(WebSocketSession session) {
+    private void sendCompletionNotification(WebSocketSession session, List<SearchResult> retrievalResults) {
         try {
             long currentTime = System.currentTimeMillis();
-            Map<String, Object> notification = Map.of(
-                "type", "completion",
-                "status", "finished", 
-                "message", "响应已完成",
-                "timestamp", currentTime,
-                "date", java.time.LocalDateTime.now().toString()
-            );
+            List<RetrievalCitation> citations = ConversationService.buildCitations(
+                    retrievalResults == null ? List.of() : retrievalResults);
+            Map<String, Object> notification = new HashMap<>();
+            notification.put("type", "completion");
+            notification.put("status", "finished");
+            notification.put("message", "响应已完成");
+            notification.put("timestamp", currentTime);
+            notification.put("date", java.time.LocalDateTime.now().toString());
+            if (!citations.isEmpty()) {
+                notification.put("citations", citations);
+            }
             String notificationJson = objectMapper.writeValueAsString(notification);
             logger.info("发送完成通知到会话 {}: {}", session.getId(), notificationJson);
             session.sendMessage(new TextMessage(notificationJson));
@@ -372,14 +408,17 @@ public class ChatHandler {
             logger.info("停止请求未找到正在进行的流式请求，会话ID: {}", sessionId);
         }
 
-        ActiveResponse activeResponse = activeResponses.remove(sessionId);
+        ActiveResponse activeResponse =         activeResponses.remove(sessionId);
         StringBuilder partialBuilder = responseBuilders.remove(sessionId);
+        List<SearchResult> retrievalResults = sessionRetrievalResults.remove(sessionId);
         if (activeResponse != null && partialBuilder != null && !partialBuilder.toString().isBlank()) {
             String partialResponse = partialBuilder + "\n\n（回答已被用户停止）";
-            updateConversationHistory(
+            persistConversationTurn(
+                    activeResponse.userId(),
                     activeResponse.conversationId(),
                     activeResponse.userMessage(),
-                    partialResponse
+                    partialResponse,
+                    retrievalResults
             );
             logger.info("已保存用户停止前的部分回答，会话ID: {}, 长度: {}", sessionId, partialResponse.length());
         }

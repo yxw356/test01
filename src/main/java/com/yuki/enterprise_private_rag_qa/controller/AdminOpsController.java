@@ -73,8 +73,9 @@ public class AdminOpsController {
                     "data", monitoringService.collectStatus()
             ));
         } catch (Exception e) {
+            LogUtils.logBusinessError("ADMIN_MONITORING", "admin", "查询运行监控失败", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("code", 500, "message", e.getMessage()));
+                    .body(Map.of("code", 500, "message", e.getMessage() != null ? e.getMessage() : "monitoring failed"));
         }
     }
 }
