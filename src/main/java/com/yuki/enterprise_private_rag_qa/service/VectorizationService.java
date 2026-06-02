@@ -44,9 +44,16 @@ public class VectorizationService {
      * @param isPublic 是否公开
      */
     public void vectorize(String fileMd5, String userId, String orgTag, boolean isPublic) {
+        vectorize(fileMd5, userId, orgTag, isPublic, defaultKnowledgeScope(isPublic), orgTag);
+    }
+
+    public void vectorize(String fileMd5, String userId, String orgTag, boolean isPublic,
+                          String knowledgeScope, String departmentId) {
         try {
-            logger.info("开始向量化文件，fileMd5: {}, userId: {}, orgTag: {}, isPublic: {}", 
-                       fileMd5, userId, orgTag, isPublic);
+            String resolvedKnowledgeScope = isBlank(knowledgeScope) ? defaultKnowledgeScope(isPublic) : knowledgeScope;
+            String resolvedDepartmentId = isBlank(departmentId) ? orgTag : departmentId;
+            logger.info("开始向量化文件，fileMd5: {}, userId: {}, orgTag: {}, isPublic: {}, scope: {}, departmentId: {}",
+                       fileMd5, userId, orgTag, isPublic, resolvedKnowledgeScope, resolvedDepartmentId);
                        
             // 获取文件分块内容
             List<TextChunk> chunks = fetchTextChunks(fileMd5);
@@ -79,7 +86,9 @@ public class VectorizationService {
                             "deepseek-embed", // 更新为 DeepSeek 的模型版本
                             userId,
                             orgTag,
-                            isPublic
+                            isPublic,
+                            resolvedKnowledgeScope,
+                            resolvedDepartmentId
                     ))
                     .toList();
 
@@ -111,7 +120,8 @@ public class VectorizationService {
             }
             FileUpload meta = upload.get();
             try {
-                vectorize(fileMd5, meta.getUserId(), meta.getOrgTag(), meta.isPublic());
+                vectorize(fileMd5, meta.getUserId(), meta.getOrgTag(), meta.isPublic(),
+                        effectiveKnowledgeScope(meta), effectiveDepartmentId(meta));
                 success++;
             } catch (Exception e) {
                 logger.error("重建索引失败, fileMd5={}", fileMd5, e);
@@ -140,5 +150,27 @@ public class VectorizationService {
                         vector.getParentTextContent()
                 ))
                 .toList();
+    }
+
+    private String effectiveKnowledgeScope(FileUpload fileUpload) {
+        if (fileUpload.getKnowledgeScope() != null) {
+            return fileUpload.getKnowledgeScope().name();
+        }
+        return defaultKnowledgeScope(fileUpload.isPublic());
+    }
+
+    private String effectiveDepartmentId(FileUpload fileUpload) {
+        if (!isBlank(fileUpload.getDepartmentId())) {
+            return fileUpload.getDepartmentId();
+        }
+        return fileUpload.getOrgTag();
+    }
+
+    private String defaultKnowledgeScope(boolean isPublic) {
+        return isPublic ? FileUpload.KnowledgeScope.PUBLIC.name() : FileUpload.KnowledgeScope.DEPARTMENT.name();
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 }

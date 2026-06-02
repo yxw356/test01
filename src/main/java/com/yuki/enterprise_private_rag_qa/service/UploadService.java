@@ -61,8 +61,9 @@ public class UploadService {
      * @param userId 上传用户ID
      * @throws IOException 如果文件读取失败
      */
-    public void uploadChunk(String fileMd5, int chunkIndex, long totalSize, String fileName, 
-                           MultipartFile file, String orgTag, boolean isPublic, String userId) throws IOException {
+    public void uploadChunk(String fileMd5, int chunkIndex, long totalSize, String fileName,
+                           MultipartFile file, String orgTag, boolean isPublic, String userId,
+                           FileUpload.KnowledgeScope knowledgeScope, String departmentId) throws IOException {
         // 获取文件类型信息
         String fileType = getFileType(fileName);
         String contentType = file.getContentType();
@@ -87,6 +88,8 @@ public class UploadService {
                 fileUpload.setUserId(userId); // 设置上传用户ID
                 fileUpload.setOrgTag(orgTag); // 设置组织标签
                 fileUpload.setPublic(isPublic); // 设置是否公开
+                fileUpload.setKnowledgeScope(knowledgeScope);
+                fileUpload.setDepartmentId(departmentId);
                 try {
                     fileUploadRepository.save(fileUpload);
                     logger.info("文件记录创建成功 => fileMd5: {}, fileName: {}, fileType: {}", fileMd5, fileName, fileType);

@@ -71,6 +71,20 @@ public class FileUpload {
     private String orgTag;
 
     /**
+     * 知识范围：PUBLIC公共知识、DEPARTMENT部门知识、PRIVATE个人知识。
+     * 旧数据默认按 isPublic/orgTag 兼容推断。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "knowledge_scope", nullable = false)
+    private KnowledgeScope knowledgeScope = KnowledgeScope.DEPARTMENT;
+
+    /**
+     * 部门专有知识所属部门。第一阶段复用组织标签ID，后续可迁移到独立部门表。
+     */
+    @Column(name = "department_id")
+    private String departmentId;
+
+    /**
      * 文件是否公开
      * true表示所有用户可访问，false表示仅组织内用户可访问
      */
@@ -90,5 +104,10 @@ public class FileUpload {
      */
     @UpdateTimestamp
     private LocalDateTime mergedAt;
-}
 
+    public enum KnowledgeScope {
+        PUBLIC,
+        DEPARTMENT,
+        PRIVATE
+    }
+}

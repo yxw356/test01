@@ -298,6 +298,31 @@ public class AdminController {
                     .body(Map.of("code", 500, "message", "分配组织标签失败: " + e.getMessage()));
         }
     }
+
+    /**
+     * 更新用户角色
+     */
+    @PutMapping("/users/{userId}/role")
+    public ResponseEntity<?> updateUserRole(
+            @RequestHeader("Authorization") String token,
+            @PathVariable Long userId,
+            @RequestBody AssignUserRoleRequest request) {
+
+        String adminUsername = jwtUtils.extractUsernameFromToken(token.replace("Bearer ", ""));
+        validateAdmin(adminUsername);
+
+        try {
+            userService.assignRoleToUser(userId, request.role(), adminUsername);
+            return ResponseEntity.ok(Map.of("code", 200, "message", "用户角色更新成功"));
+        } catch (CustomException e) {
+            LogUtils.logBusinessError("ADMIN_ASSIGN_USER_ROLE", adminUsername, "更新用户角色失败: %s", e, e.getMessage());
+            return ResponseEntity.status(e.getStatus()).body(Map.of("code", e.getStatus().value(), "message", e.getMessage()));
+        } catch (Exception e) {
+            LogUtils.logBusinessError("ADMIN_ASSIGN_USER_ROLE", adminUsername, "更新用户角色异常: %s", e, e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("code", 500, "message", "更新用户角色失败: " + e.getMessage()));
+        }
+    }
     
     /**
      * 获取组织标签树结构
@@ -391,6 +416,7 @@ public class AdminController {
             @RequestHeader("Authorization") String token,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) String orgTag,
+            @RequestParam(required = false) String role,
             @RequestParam(required = false) Integer status,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
@@ -399,7 +425,7 @@ public class AdminController {
         validateAdmin(adminUsername);
         
         try {
-            Map<String, Object> usersData = userService.getUserList(keyword, orgTag, status, page, size);
+            Map<String, Object> usersData = userService.getUserList(keyword, orgTag, role, status, page, size);
             return ResponseEntity.ok(Map.of(
                 "code", 200, 
                 "message", "获取用户列表成功", 
@@ -589,7 +615,7 @@ public class AdminController {
         User admin = userRepository.findByUsername(username)
                 .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
         
-        if (admin.getRole() != User.Role.ADMIN) {
+        if (!admin.isSuperAdmin()) {
             throw new CustomException("Unauthorized access: Admin role required", HttpStatus.FORBIDDEN);
         }
         
@@ -611,6 +637,11 @@ record OrgTagRequest(String tagId, String name, String description, String paren
  * 分配组织标签请求体
  */
 record AssignOrgTagsRequest(List<String> orgTags) {}
+
+/**
+ * 分配用户角色请求体
+ */
+record AssignUserRoleRequest(String role) {}
 
 // 添加组织标签更新请求记录类
 record OrgTagUpdateRequest(String name, String description, String parentTag) {} 

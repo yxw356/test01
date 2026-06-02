@@ -88,68 +88,133 @@ async function handleSourceFileClick(fileName: string) {
 </script>
 
 <template>
-  <div class="chat-message mb-7 flex-col gap-2">
-    <div v-if="msg.role === 'user'" class="flex items-center gap-4">
-      <NAvatar class="user-avatar">
-        <SvgIcon icon="ph:user-circle" class="text-icon-large color-white" />
-      </NAvatar>
-      <div class="flex-col gap-1">
-        <NText class="text-4 font-bold">{{ authStore.userInfo.username }}</NText>
-        <NText class="text-3 color-gray-500">{{ formatDate(msg.timestamp) }}</NText>
-      </div>
-    </div>
-    <div v-else class="flex items-center gap-4">
-      <NAvatar class="assistant-avatar">
+  <div class="chat-message mb-7">
+    <div :class="['message-row', msg.role === 'user' ? 'message-row-user' : 'message-row-assistant']">
+      <NAvatar v-if="msg.role !== 'user'" class="assistant-avatar message-avatar">
         <SystemLogo class="text-6" />
       </NAvatar>
-      <div class="flex-col gap-1">
-        <NText class="text-4 font-bold">知识库助手</NText>
-        <NText class="text-3 color-gray-500">{{ formatDate(msg.timestamp) }}</NText>
-      </div>
-    </div>
-    <NText v-if="msg.status === 'pending'">
-      <icon-eos-icons:three-dots-loading class="ml-12 mt-2 text-8" />
-    </NText>
-    <NText v-else-if="msg.status === 'error'" class="ml-12 mt-2 italic">服务器繁忙，请稍后再试</NText>
-    <div v-else-if="msg.role === 'assistant'" class="assistant-message-shell mt-2 pl-12" @click="handleContentClick">
-      <div class="assistant-message-card">
-        <VueMarkdownIt :content="content" />
-      </div>
-      <div v-if="msg.citations?.length" class="citations-panel mt-3">
-        <NText depth="3" class="mb-2 block text-13px">参考来源（{{ msg.citations.length }}）</NText>
-        <div
-          v-for="citation in msg.citations"
-          :key="citation.index"
-          class="citation-item"
-          @click.stop="citation.fileName && openFilePreview(citation.fileName)"
-        >
-          <div class="citation-title">
-            <span class="citation-index">#{{ citation.index }}</span>
-            <span class="citation-name">{{ citation.fileName || '未知文件' }}</span>
-            <NTag v-if="citation.score != null" size="small" :bordered="false" type="info">
-              {{ citation.score.toFixed(3) }}
-            </NTag>
+
+      <div :class="['message-body', msg.role === 'user' ? 'message-body-user' : 'message-body-assistant']">
+        <div class="message-meta">
+          <NText class="text-4 font-bold">{{ msg.role === 'user' ? authStore.userInfo.username : '知识库助手' }}</NText>
+          <NText class="text-3 color-gray-500">{{ formatDate(msg.timestamp) }}</NText>
+        </div>
+
+        <NText v-if="msg.status === 'pending'" class="message-pending">
+          <icon-eos-icons:three-dots-loading class="text-8" />
+        </NText>
+        <NText v-else-if="msg.status === 'error'" class="message-error italic">服务器繁忙，请稍后再试</NText>
+        <div v-else-if="msg.role === 'assistant'" class="assistant-message-shell" @click="handleContentClick">
+          <div class="assistant-message-card">
+            <VueMarkdownIt :content="content" />
           </div>
-          <p v-if="citation.snippet" class="citation-snippet">{{ citation.snippet }}</p>
+          <div v-if="msg.citations?.length" class="citations-panel mt-3">
+            <NText depth="3" class="mb-2 block text-13px">参考来源（{{ msg.citations.length }}）</NText>
+            <div
+              v-for="citation in msg.citations"
+              :key="citation.index"
+              class="citation-item"
+              @click.stop="citation.fileName && openFilePreview(citation.fileName)"
+            >
+              <div class="citation-title">
+                <span class="citation-index">#{{ citation.index }}</span>
+                <span class="citation-name">{{ citation.fileName || '未知文件' }}</span>
+                <NTag v-if="citation.score != null" size="small" :bordered="false" type="info">
+                  {{ citation.score.toFixed(3) }}
+                </NTag>
+              </div>
+              <p v-if="citation.snippet" class="citation-snippet">{{ citation.snippet }}</p>
+            </div>
+          </div>
+        </div>
+        <div v-else-if="msg.role === 'user'" class="user-message-card text-4">{{ content }}</div>
+
+        <div class="message-actions">
+          <NButton quaternary circle size="small" @click="handleCopy(msg.content)">
+            <template #icon>
+              <icon-mynaui:copy />
+            </template>
+          </NButton>
         </div>
       </div>
+
+      <NAvatar v-if="msg.role === 'user'" class="user-avatar message-avatar">
+        <SvgIcon icon="ph:user-circle" class="text-icon-large color-white" />
+      </NAvatar>
     </div>
-    <div v-else-if="msg.role === 'user'" class="user-message-card ml-12 mt-2 text-4">{{ content }}</div>
-    <NDivider class="message-divider ml-12 w-[calc(100%-3rem)] mb-0! mt-2!" />
-    <div class="ml-12 flex gap-4">
-      <NButton quaternary @click="handleCopy(msg.content)">
-        <template #icon>
-          <icon-mynaui:copy />
-        </template>
-      </NButton>
-    </div>
-    <FilePreview v-model:visible="previewVisible" :file-name="previewFileName" />
+
+    <NModal v-model:show="previewVisible" preset="card" title="文件预览" class="paper-modal max-w-1000px w-[80%]">
+      <FilePreview :file-name="previewFileName" :visible="previewVisible" @close="previewVisible = false" />
+    </NModal>
   </div>
 </template>
 
 <style scoped lang="scss">
 .user-avatar {
   background: rgb(var(--success-color));
+}
+
+.message-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+}
+
+.message-row-user {
+  justify-content: flex-end;
+}
+
+.message-row-assistant {
+  justify-content: flex-start;
+}
+
+.message-avatar {
+  flex: 0 0 auto;
+}
+
+.message-body {
+  display: flex;
+  flex-direction: column;
+  max-width: min(78%, 60rem);
+}
+
+.message-body-user {
+  align-items: flex-end;
+}
+
+.message-body-assistant {
+  align-items: flex-start;
+}
+
+.message-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.message-body-user .message-meta {
+  flex-direction: row-reverse;
+}
+
+.message-actions {
+  display: flex;
+  margin-top: 6px;
+  opacity: 0.66;
+}
+
+.message-body-user .message-actions {
+  justify-content: flex-end;
+}
+
+.message-body-assistant .message-actions {
+  justify-content: flex-start;
+}
+
+.message-pending,
+.message-error {
+  margin-top: 4px;
 }
 
 :deep(.assistant-avatar) {
@@ -159,11 +224,10 @@ async function handleSourceFileClick(fileName: string) {
 }
 
 .assistant-message-shell {
-  padding-right: 12px;
+  width: 100%;
 }
 
 :deep(.assistant-message-card) {
-  max-width: min(100%, 60rem);
   border: 1px solid rgb(15 23 42 / 0.08);
   border-radius: 8px;
   background: rgb(248 250 252);
@@ -171,13 +235,14 @@ async function handleSourceFileClick(fileName: string) {
 }
 
 .user-message-card {
-  max-width: min(100%, 48rem);
   border: 1px solid rgb(var(--primary-color) / 0.1);
   border-radius: 8px;
-  background: rgb(var(--primary-color) / 0.06);
+  background: rgb(var(--primary-color));
+  color: #fff;
   padding: 12px 14px;
   line-height: 1.75;
   white-space: pre-wrap;
+  text-align: left;
 }
 
 :deep(.assistant-message-card > :first-child) {

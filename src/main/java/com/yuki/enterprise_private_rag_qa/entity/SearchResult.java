@@ -14,6 +14,8 @@ public class SearchResult {
     private String userId;     // 上传用户ID
     private String orgTag;     // 组织标签
     private Boolean isPublic;  // 是否公开
+    private String knowledgeScope; // 知识范围
+    private String departmentId;   // 所属部门
 
     // === 多路召回 + RRF + Cross-Encoder + MMR 链路追踪字段 ===
     private String retrievalSource;   // 召回路标识：raw_bm25/raw_vector/cleaned_bm25/rewrite_vector/rewrite_bm25/hyde_vector/entity_bm25/reflection_bm25/reflection_vector
@@ -45,6 +47,13 @@ public class SearchResult {
 
     public SearchResult(String fileMd5, Integer chunkId, String parentId, String textContent, String parentTextContent,
                         Double score, String userId, String orgTag, boolean isPublic, String fileName) {
+        this(fileMd5, chunkId, parentId, textContent, parentTextContent, score, userId, orgTag, isPublic,
+                fileName, isPublic ? "PUBLIC" : "DEPARTMENT", orgTag);
+    }
+
+    public SearchResult(String fileMd5, Integer chunkId, String parentId, String textContent, String parentTextContent,
+                        Double score, String userId, String orgTag, boolean isPublic, String fileName,
+                        String knowledgeScope, String departmentId) {
         this.fileMd5 = fileMd5;
         this.chunkId = chunkId;
         this.parentId = parentId;
@@ -55,5 +64,7 @@ public class SearchResult {
         this.orgTag = orgTag;
         this.isPublic = isPublic;
         this.fileName = fileName;
+        this.knowledgeScope = knowledgeScope;
+        this.departmentId = departmentId;
     }
 }

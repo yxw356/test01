@@ -24,13 +24,15 @@ public class DeepSeekClient {
     private final String apiKey;
     private final String model;
     private final AiProperties aiProperties;
+    private final boolean ragEnabled;
     private static final Logger logger = LoggerFactory.getLogger(DeepSeekClient.class);
     private static final int MAX_HISTORY_MESSAGES = 6;
     
     public DeepSeekClient(@Value("${deepseek.api.url}") String apiUrl,
                          @Value("${deepseek.api.key}") String apiKey,
                          @Value("${deepseek.api.model}") String model,
-                         AiProperties aiProperties) {
+                         AiProperties aiProperties,
+                         @Value("${rag.enabled:true}") boolean ragEnabled) {
         WebClient.Builder builder = WebClient.builder().baseUrl(apiUrl);
         
         // 只有当 API key 不为空时才添加 Authorization header
@@ -42,6 +44,7 @@ public class DeepSeekClient {
         this.apiKey = apiKey;
         this.model = model;
         this.aiProperties = aiProperties;
+        this.ragEnabled = ragEnabled;
     }
     
     public Disposable streamResponse(String userMessage,
@@ -96,6 +99,9 @@ public class DeepSeekClient {
         if (gen.getMaxTokens() != null) {
             request.put("max_tokens", gen.getMaxTokens());
         }
+        if (!ragEnabled) {
+            request.put("chat_template_kwargs", Map.of("enable_thinking", false));
+        }
         return request;
     }
     
@@ -131,6 +137,11 @@ public class DeepSeekClient {
     }
 
     private String buildCurrentTurnContent(String userMessage, String context, AiProperties.Prompt promptCfg) {
+        if (!ragEnabled) {
+            return "请直接回答用户问题；如果问题与本地知识库资料有关但当前没有检索上下文，请说明当前为本地纯聊天模式。"
+                    + "\n\n用户问题：\n" + userMessage;
+        }
+
         String refStart = promptCfg.getRefStart() != null ? promptCfg.getRefStart() : "<<REF>>";
         String refEnd = promptCfg.getRefEnd() != null ? promptCfg.getRefEnd() : "<<END>>";
         String noResult = promptCfg.getNoResultText() != null ? promptCfg.getNoResultText() : "（本轮无检索结果）";
@@ -265,28 +276,28 @@ public class DeepSeekClient {
                 return;
             }
 
-            String payload = chunk.trim();
-            if (payload.startsWith("data:")) {
-                payload = payload.substring("data:".length()).trim();
-            }
-
-            // 检查是否是结束标记
-            if ("[DONE]".equals(payload)) {
-                logger.debug("对话结束");
-                return;
-            }
-            
-            // 直接解析 JSON
             ObjectMapper mapper = new ObjectMapper();
-            JsonNode node = mapper.readTree(payload);
-            String content = node.path("choices")
-                               .path(0)
-                               .path("delta")
-                               .path("content")
-                               .asText("");
-            
-            if (!content.isEmpty()) {
-                onChunk.accept(content);
+            for (String line : chunk.split("\\R")) {
+                String payload = line.trim();
+                if (payload.isEmpty() || payload.startsWith(":")) {
+                    continue;
+                }
+                if (payload.startsWith("data:")) {
+                    payload = payload.substring("data:".length()).trim();
+                }
+
+                if ("[DONE]".equals(payload)) {
+                    logger.debug("对话结束");
+                    continue;
+                }
+
+                JsonNode node = mapper.readTree(payload);
+                JsonNode delta = node.path("choices").path(0).path("delta");
+                String content = delta.path("content").asText("");
+
+                if (!content.isEmpty()) {
+                    onChunk.accept(content);
+                }
             }
         } catch (Exception e) {
             logger.error("处理数据块时出错: {}", e.getMessage(), e);

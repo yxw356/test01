@@ -40,7 +40,7 @@ declare namespace Api {
     interface UserInfo {
       id: number;
       username: string;
-      role: 'USER' | 'ADMIN';
+      role: 'USER' | 'DEPT_MEMBER' | 'DEPT_LEAD' | 'KNOWLEDGE_ADMIN' | 'SUPER_ADMIN' | 'ADMIN';
       orgTags: string[];
       primaryOrg: string;
     }
@@ -71,6 +71,7 @@ declare namespace Api {
       description: string;
       parentTag: string | null;
       children?: Item[];
+      deptLeads?: string[];
     }
 
     type List = Common.PaginatingQueryRecord<Item>;
@@ -88,6 +89,7 @@ declare namespace Api {
       Common.CommonSearchParams & {
         keyword: string;
         orgTag: string;
+        role: Auth.UserInfo['role'];
         status: number;
       }
     >;
@@ -95,11 +97,14 @@ declare namespace Api {
     type Item = {
       userId: string;
       username: string;
+      role: Auth.UserInfo['role'];
       email: string;
       status: number;
       orgTags: Pick<OrgTag.Item, 'tagId' | 'name'>[];
       primaryOrg: string;
       createTime: string;
+      createdAt?: string;
+      updatedAt?: string;
       lastLoginTime: string;
     };
 
@@ -129,21 +134,28 @@ declare namespace Api {
     interface Form {
       orgTag: string | null;
       orgTagName: string | null;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      departmentId: string | null;
       isPublic: boolean;
       fileList: import('naive-ui').UploadFileInfo[];
     }
 
     interface UploadTask {
-      file: File;
+      file?: File;
       chunk: Blob | null;
       fileMd5: string;
       chunkIndex: number;
       totalSize: number;
       fileName: string;
+      userId?: string;
       orgTag: string | null;
       orgTagName?: string | null;
+      knowledgeScope?: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      departmentId?: string | null;
       public: boolean;
       isPublic: boolean;
+      canView?: boolean;
+      canManage?: boolean;
       uploadedChunks: number[];
       progress: number;
       status: UploadStatus;
@@ -151,6 +163,7 @@ declare namespace Api {
       mergedAt?: string;
       indexStatus?: number;
       indexError?: string | null;
+      uploadError?: string;
       requestIds?: string[]; // 请求ID，用于取消上传
     }
     type List = Common.PaginatingQueryRecord<UploadTask>;
@@ -161,6 +174,12 @@ declare namespace Api {
       uploaded: number[];
       progress: number;
       totalChunks: number;
+    }
+
+    interface UploadPreflight {
+      ready: boolean;
+      message: string;
+      components: Record<string, { status: string; detail?: string; bucket?: string; topic?: string }>;
     }
 
     interface Result {
@@ -241,6 +260,7 @@ declare namespace Api {
       timestamp?: string;
       components?: {
         redis?: ComponentStatus;
+        minio?: ComponentStatus;
         elasticsearch?: ComponentStatus;
         vllmChat?: ComponentStatus;
         vllmEmbedding?: ComponentStatus;

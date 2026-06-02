@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Component;
 
@@ -24,6 +25,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 
 @Component
+@ConditionalOnProperty(prefix = "app.init.elasticsearch", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class EsIndexInitializer implements CommandLineRunner {
 
     private static final Logger logger = LoggerFactory.getLogger(EsIndexInitializer.class);
@@ -72,6 +74,11 @@ public class EsIndexInitializer implements CommandLineRunner {
             esClient.indices().delete(DeleteIndexRequest.of(d -> d.index(INDEX_NAME)));
             createIndex();
             reindexAfterMigration();
+        } else if (!hasPermissionFields()) {
+            logger.warn("索引 '{}' 缺少权限字段 knowledgeScope/departmentId，将重建索引", INDEX_NAME);
+            esClient.indices().delete(DeleteIndexRequest.of(d -> d.index(INDEX_NAME)));
+            createIndex();
+            reindexAfterMigration();
         } else {
             logger.info("索引 '{}' 已存在，向量维度={}", INDEX_NAME, currentDims);
         }
@@ -103,6 +110,21 @@ public class EsIndexInitializer implements CommandLineRunner {
         } catch (Exception e) {
             logger.warn("读取索引映射失败: {}", e.getMessage());
             return null;
+        }
+    }
+
+    private boolean hasPermissionFields() {
+        try {
+            GetMappingResponse mapping = esClient.indices().getMapping(
+                    GetMappingRequest.of(g -> g.index(INDEX_NAME)));
+            var properties = mapping.result()
+                    .get(INDEX_NAME)
+                    .mappings()
+                    .properties();
+            return properties.containsKey("knowledgeScope") && properties.containsKey("departmentId");
+        } catch (Exception e) {
+            logger.warn("读取权限字段映射失败: {}", e.getMessage());
+            return false;
         }
     }
 

@@ -99,7 +99,9 @@ public class HybridSearchService {
 
             logger.debug("向量生成成功，开始执行混合搜索 KNN");
 
-            Query permissionFilter = buildPermissionFilter(userDbId, userEffectiveTags);
+            Query permissionFilter = isSuperAdminUser(userId)
+                    ? Query.of(q -> q.matchAll(m -> m))
+                    : buildPermissionFilter(userDbId, userEffectiveTags);
             int recallK = getRecallK(topK);
             List<SearchResult> semanticResults = safeSemanticSearch(queryVector, permissionFilter, recallK);
             List<SearchResult> keywordResults = safeKeywordSearch(query, permissionFilter, recallK, true);
@@ -109,6 +111,9 @@ public class HybridSearchService {
             logger.debug("RRF融合和父块聚合完成，语义召回: {}, 关键词召回: {}, 父块结果: {}",
                     semanticResults.size(), keywordResults.size(), results.size());
             attachFileNames(results);
+            if (isSuperAdminUser(userId)) {
+                return results;
+            }
             return applyAccessPolicy(results, userDbId, userEffectiveTags);
         } catch (Exception e) {
             logger.error("带权限的搜索失败", e);
@@ -260,6 +265,9 @@ public class HybridSearchService {
      * 供 MultiRouteRetriever 获取统一的权限过滤条件。
      */
     public Query buildPermissionFilter(String userId) {
+        if (isSuperAdminUser(userId)) {
+            return Query.of(q -> q.matchAll(m -> m));
+        }
         List<String> userEffectiveTags = getUserEffectiveOrgTags(userId);
         String userDbId = getUserDbId(userId);
         return buildPermissionFilter(userDbId, userEffectiveTags);
@@ -444,9 +452,11 @@ public class HybridSearchService {
             appendPublicAccessShoulds(b);
             userEffectiveTags.forEach(tag -> {
                 b.should(s -> s.term(t -> t.field("orgTag").value(tag)));
+                b.should(s -> s.term(t -> t.field("departmentId").value(tag)));
                 // 兼容上传时使用小写 default、组织表使用大写 DEFAULT 的情况
                 if (tag != null && "DEFAULT".equalsIgnoreCase(tag)) {
                     b.should(s -> s.term(t -> t.field("orgTag").value("default")));
+                    b.should(s -> s.term(t -> t.field("departmentId").value("default")));
                 }
             });
             return b.minimumShouldMatch("1");
@@ -464,6 +474,7 @@ public class HybridSearchService {
         // 兼容 Java boolean isPublic 序列化成 public 以及 mapping 中定义的 isPublic 两种字段名。
         b.should(s -> s.term(t -> t.field("public").value(true)));
         b.should(s -> s.term(t -> t.field("isPublic").value(true)));
+        b.should(s -> s.term(t -> t.field("knowledgeScope").value("PUBLIC")));
     }
 
     private List<SearchResult> applyAccessPolicy(List<SearchResult> results, String userDbId,
@@ -473,6 +484,8 @@ public class HybridSearchService {
                         result.getUserId(),
                         result.getOrgTag(),
                         Boolean.TRUE.equals(result.getIsPublic()),
+                        result.getKnowledgeScope(),
+                        result.getDepartmentId(),
                         userDbId,
                         userEffectiveTags
                 ))
@@ -498,7 +511,9 @@ public class HybridSearchService {
                 source.getUserId(),
                 source.getOrgTag(),
                 Boolean.TRUE.equals(source.getIsPublic()),
-                null
+                null,
+                source.getKnowledgeScope(),
+                source.getDepartmentId()
         );
     }
 
@@ -557,6 +572,23 @@ public class HybridSearchService {
         } catch (Exception e) {
             logger.error("获取用户有效组织标签失败: {}", e.getMessage(), e);
             return Collections.emptyList(); // 返回空列表作为默认值
+        }
+    }
+
+    private boolean isSuperAdminUser(String userId) {
+        try {
+            User user;
+            try {
+                user = userRepository.findById(Long.parseLong(userId))
+                        .orElseThrow(() -> new CustomException("User not found with ID: " + userId, HttpStatus.NOT_FOUND));
+            } catch (NumberFormatException e) {
+                user = userRepository.findByUsername(userId)
+                        .orElseThrow(() -> new CustomException("User not found: " + userId, HttpStatus.NOT_FOUND));
+            }
+            return user.isSuperAdmin();
+        } catch (Exception e) {
+            logger.warn("判断超级管理员失败，按普通用户处理: {}", userId);
+            return false;
         }
     }
 

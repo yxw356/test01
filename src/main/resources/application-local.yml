@@ -1,0 +1,43 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:PaiSmart;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+  kafka:
+    listener:
+      auto-startup: true
+
+app:
+  init:
+    elasticsearch:
+      enabled: true
+    minio:
+      enabled: true
+
+security:
+  token-cache:
+    enabled: false
+
+chat:
+  redis:
+    enabled: true
+
+rag:
+  enabled: true
+
+elasticsearch:
+  username:
+  password:
+
+logging:
+  level:
+    org.apache.kafka: WARN
+    org.springframework.kafka: WARN

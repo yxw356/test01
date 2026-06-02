@@ -53,17 +53,21 @@ public class SecurityConfig {
                             // 允许测试接口
                             .requestMatchers("/api/v1/test/**").permitAll()
                             // 文件上传和下载相关接口 - 普通用户和管理员都可访问
-                            .requestMatchers("/api/v1/upload/**", "/api/v1/parse", "/api/v1/documents/download", "/api/v1/documents/preview").hasAnyRole("USER", "ADMIN")
+                            .requestMatchers("/api/v1/upload/**", "/api/v1/parse", "/api/v1/documents/download", "/api/v1/documents/preview")
+                            .hasAnyRole("USER", "DEPT_MEMBER", "DEPT_LEAD", "KNOWLEDGE_ADMIN", "SUPER_ADMIN", "ADMIN")
                             // 对话历史相关接口 - 用户只能查看自己的历史，管理员可以查看所有
-                            .requestMatchers("/api/v1/users/conversation/**").hasAnyRole("USER", "ADMIN")
+                            .requestMatchers("/api/v1/users/conversation/**")
+                            .hasAnyRole("USER", "DEPT_MEMBER", "DEPT_LEAD", "KNOWLEDGE_ADMIN", "SUPER_ADMIN", "ADMIN")
                             // 搜索接口 - 普通用户和管理员都可访问
-                            .requestMatchers("/api/search/**").hasAnyRole("USER", "ADMIN")
+                            .requestMatchers("/api/search/**")
+                            .hasAnyRole("USER", "DEPT_MEMBER", "DEPT_LEAD", "KNOWLEDGE_ADMIN", "SUPER_ADMIN", "ADMIN")
                             // 聊天相关接口 - WebSocket停止Token获取 (允许匿名访问)
                             .requestMatchers("/api/chat/websocket-token").permitAll()
                             // 管理员专属接口 - 知识库管理、系统状态、用户活动监控
-                            .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                            .requestMatchers("/api/v1/admin/**").hasAnyRole("SUPER_ADMIN", "ADMIN")
                             // 用户组织标签管理接口
-                            .requestMatchers("/api/v1/users/primary-org").hasAnyRole("USER", "ADMIN")
+                            .requestMatchers("/api/v1/users/primary-org")
+                            .hasAnyRole("USER", "DEPT_MEMBER", "DEPT_LEAD", "KNOWLEDGE_ADMIN", "SUPER_ADMIN", "ADMIN")
                             // 其他请求需要认证
                             .anyRequest().authenticated())
                     // 配置会话管理策略
@@ -87,4 +91,3 @@ public class SecurityConfig {
         }
     }
 }
-

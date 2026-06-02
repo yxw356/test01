@@ -9,11 +9,21 @@ function apiFn(params: Api.User.SearchParams) {
   return request<Api.User.List>({ url: '/admin/users/list', params });
 }
 
+const roleMeta: Record<Api.Auth.UserInfo['role'], { label: string; type: 'default' | 'success' | 'warning' | 'error' | 'info' }> = {
+  USER: { label: '普通用户', type: 'default' },
+  DEPT_MEMBER: { label: '部门成员', type: 'info' },
+  DEPT_LEAD: { label: '部门负责人', type: 'success' },
+  KNOWLEDGE_ADMIN: { label: '知识管理员', type: 'warning' },
+  SUPER_ADMIN: { label: '超级管理员', type: 'error' },
+  ADMIN: { label: '超级管理员(兼容)', type: 'error' }
+};
+
 const { columns, columnChecks, data, getData, loading, mobilePagination, searchParams, resetSearchParams } = useTable({
   apiFn,
   apiParams: {
     keyword: null,
     orgTag: null,
+    role: null,
     status: null
   },
   columns: () => [
@@ -28,8 +38,17 @@ const { columns, columnChecks, data, getData, loading, mobilePagination, searchP
       minWidth: 100
     },
     {
+      key: 'role',
+      title: '角色',
+      width: 150,
+      render: row => {
+        const meta = roleMeta[row.role] || roleMeta.USER;
+        return <NTag type={meta.type}>{meta.label}</NTag>;
+      }
+    },
+    {
       key: 'orgTags',
-      title: '标签',
+      title: '所属部门',
       render: row => (
         <div class="flex flex-wrap gap-2">
           {row.orgTags.map(tag => (
@@ -55,7 +74,7 @@ const { columns, columnChecks, data, getData, loading, mobilePagination, searchP
       key: 'createTime',
       title: '创建时间',
       width: 200,
-      render: row => dayjs(row.createTime).format('YYYY-MM-DD HH:mm:ss')
+      render: row => (row.createTime || row.createdAt ? dayjs(row.createTime || row.createdAt).format('YYYY-MM-DD HH:mm:ss') : '-')
     },
     {
       key: 'lastLoginTime',
@@ -66,10 +85,10 @@ const { columns, columnChecks, data, getData, loading, mobilePagination, searchP
     {
       key: 'operate',
       title: '操作',
-      width: 130,
+      width: 110,
       render: row => (
-        <NButton type="primary" ghost size="small" onClick={() => handleOrgTag(row)}>
-          分配组织标签
+        <NButton type="primary" ghost size="small" onClick={() => handlePermission(row)}>
+          权限设置
         </NButton>
       )
     }
@@ -78,7 +97,7 @@ const { columns, columnChecks, data, getData, loading, mobilePagination, searchP
 
 const visible = ref(false);
 const editingData = ref<Api.User.Item | null>(null);
-function handleOrgTag(row: Api.User.Item) {
+function handlePermission(row: Api.User.Item) {
   editingData.value = row;
   visible.value = true;
 }
@@ -111,7 +130,7 @@ function handleOrgTag(row: Api.User.Item) {
         :scroll-x="962"
         :loading="loading"
         remote
-        :row-key="row => row.id"
+        :row-key="row => row.userId"
         :pagination="mobilePagination"
         class="sm:h-full"
       />

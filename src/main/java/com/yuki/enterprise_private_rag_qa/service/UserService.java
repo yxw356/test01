@@ -54,6 +54,10 @@ public class UserService {
     @Autowired
     private OrgTagCacheService orgTagCacheService;
 
+    private boolean isSuperAdmin(User user) {
+        return user != null && user.isSuperAdmin();
+    }
+
     /**
      * 注册新用户。
      *
@@ -201,7 +205,7 @@ public class UserService {
         User creator = userRepository.findByUsername(creatorUsername)
                 .orElseThrow(() -> new CustomException("Creator not found", HttpStatus.NOT_FOUND));
         
-        if (creator.getRole() != User.Role.ADMIN) {
+        if (!isSuperAdmin(creator)) {
             throw new CustomException("Only administrators can create admin accounts", HttpStatus.FORBIDDEN);
         }
         
@@ -253,7 +257,7 @@ public class UserService {
         User creator = userRepository.findByUsername(creatorUsername)
                 .orElseThrow(() -> new CustomException("Creator not found", HttpStatus.NOT_FOUND));
         
-        if (creator.getRole() != User.Role.ADMIN) {
+        if (!isSuperAdmin(creator)) {
             throw new CustomException("Only administrators can create organization tags", HttpStatus.FORBIDDEN);
         }
         
@@ -296,7 +300,7 @@ public class UserService {
         User admin = userRepository.findByUsername(adminUsername)
                 .orElseThrow(() -> new CustomException("Admin not found", HttpStatus.NOT_FOUND));
         
-        if (admin.getRole() != User.Role.ADMIN) {
+        if (!isSuperAdmin(admin)) {
             throw new CustomException("Only administrators can assign organization tags", HttpStatus.FORBIDDEN);
         }
         
@@ -351,6 +355,40 @@ public class UserService {
         if (user.getPrimaryOrg() != null && !user.getPrimaryOrg().isEmpty()) {
             orgTagCacheService.cacheUserPrimaryOrg(user.getUsername(), user.getPrimaryOrg());
         }
+    }
+
+    /**
+     * 为用户分配系统角色。
+     *
+     * @param userId 用户ID
+     * @param roleName 角色名称
+     * @param adminUsername 管理员用户名
+     */
+    @Transactional
+    public void assignRoleToUser(Long userId, String roleName, String adminUsername) {
+        User admin = userRepository.findByUsername(adminUsername)
+                .orElseThrow(() -> new CustomException("Admin not found", HttpStatus.NOT_FOUND));
+
+        if (!isSuperAdmin(admin)) {
+            throw new CustomException("Only administrators can assign user roles", HttpStatus.FORBIDDEN);
+        }
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
+
+        if (admin.getId().equals(user.getId())) {
+            throw new CustomException("Cannot change your own role", HttpStatus.BAD_REQUEST);
+        }
+
+        User.Role role;
+        try {
+            role = User.Role.valueOf(roleName);
+        } catch (Exception e) {
+            throw new CustomException("Invalid role: " + roleName, HttpStatus.BAD_REQUEST);
+        }
+
+        user.setRole(role);
+        userRepository.save(user);
     }
     
     /**
@@ -533,7 +571,7 @@ public class UserService {
         User admin = userRepository.findByUsername(adminUsername)
                 .orElseThrow(() -> new CustomException("Admin not found", HttpStatus.NOT_FOUND));
         
-        if (admin.getRole() != User.Role.ADMIN) {
+        if (!isSuperAdmin(admin)) {
             throw new CustomException("Only administrators can update organization tags", HttpStatus.FORBIDDEN);
         }
         
@@ -617,7 +655,7 @@ public class UserService {
         User admin = userRepository.findByUsername(adminUsername)
                 .orElseThrow(() -> new CustomException("Admin not found", HttpStatus.NOT_FOUND));
         
-        if (admin.getRole() != User.Role.ADMIN) {
+        if (!isSuperAdmin(admin)) {
             throw new CustomException("Only administrators can delete organization tags", HttpStatus.FORBIDDEN);
         }
         
@@ -679,87 +717,74 @@ public class UserService {
      * 
      * @param keyword 搜索关键词
      * @param orgTag 组织标签过滤
-     * @param status 用户状态过滤
+     * @param role 用户角色过滤
+     * @param status 用户状态过滤（兼容旧前端参数）
      * @param page 页码
      * @param size 每页大小
      * @return 用户列表数据
      */
-    public Map<String, Object> getUserList(String keyword, String orgTag, Integer status, int page, int size) {
+    public Map<String, Object> getUserList(String keyword, String orgTag, String role, Integer status, int page, int size) {
         // 页码从1开始，需要转换为从0开始
         int pageIndex = page > 0 ? page - 1 : 0;
         // 创建分页请求
         Pageable pageable = PageRequest.of(pageIndex, size, Sort.by("createdAt").descending());
-        
-        // 获取用户列表
-        Page<User> userPage;
-        
-        if (orgTag != null && !orgTag.isEmpty()) {
-            // 按组织标签过滤用户
-            // 由于我们存储组织标签为逗号分隔的字符串，需要自定义实现
-            // 这里简化处理，获取所有用户后手动过滤
-            List<User> allUsers = userRepository.findAll();
-            List<User> filteredUsers = allUsers.stream()
-                    .filter(user -> {
-                        // 过滤组织标签
-                        if (user.getOrgTags() != null && !user.getOrgTags().isEmpty()) {
-                            Set<String> userTags = new HashSet<>(Arrays.asList(user.getOrgTags().split(",")));
-                            if (!userTags.contains(orgTag)) {
-                                return false;
-                            }
-                        } else {
+
+        User.Role roleFilter = null;
+        if (role != null && !role.isBlank()) {
+            try {
+                roleFilter = User.Role.valueOf(role);
+            } catch (IllegalArgumentException e) {
+                throw new CustomException("Invalid role: " + role, HttpStatus.BAD_REQUEST);
+            }
+        }
+        User.Role finalRoleFilter = roleFilter;
+
+        List<User> filteredUsers = userRepository.findAll().stream()
+                .filter(user -> {
+                    if (keyword != null && !keyword.isBlank() && !user.getUsername().contains(keyword)) {
+                        return false;
+                    }
+
+                    if (orgTag != null && !orgTag.isBlank()) {
+                        if (user.getOrgTags() == null || user.getOrgTags().isBlank()) {
                             return false;
                         }
-                        
-                        // 过滤关键词
-                        if (keyword != null && !keyword.isEmpty()) {
-                            boolean matchesKeyword = user.getUsername().contains(keyword);
-                            if (!matchesKeyword) {
-                                return false;
-                            }
+                        Set<String> userTags = new HashSet<>(Arrays.asList(user.getOrgTags().split(",")));
+                        if (!userTags.contains(orgTag)) {
+                            return false;
                         }
-                        
-                        // 过滤状态
-                        if (status != null) {
-                            return user.getRole() == (status == 1 ? User.Role.USER : User.Role.ADMIN);
-                        }
-                        
-                        return true;
-                    })
-                    .collect(Collectors.toList());
-            
-            // 手动分页
-            int start = (int) pageable.getOffset();
-            int end = Math.min((start + pageable.getPageSize()), filteredUsers.size());
-            
-            List<User> pageContent = start < end ? filteredUsers.subList(start, end) : Collections.emptyList();
-            userPage = new PageImpl<>(pageContent, pageable, filteredUsers.size());
-        } else {
-            // 使用 JPA 分页查询（不含组织标签过滤）
-            // 这里假设UserRepository有findByKeywordAndStatus方法，实际中可能需要自定义实现
-            userPage = userRepository.findAll(pageable);
-            
-            // 手动过滤（简化实现）
-            List<User> filteredUsers = userPage.getContent().stream()
-                    .filter(user -> {
-                        // 过滤关键词
-                        if (keyword != null && !keyword.isEmpty()) {
-                            boolean matchesKeyword = user.getUsername().contains(keyword);
-                            if (!matchesKeyword) {
-                                return false;
-                            }
-                        }
-                        
-                        // 过滤状态
-                        if (status != null) {
-                            return user.getRole() == (status == 1 ? User.Role.USER : User.Role.ADMIN);
-                        }
-                        
-                        return true;
-                    })
-                    .collect(Collectors.toList());
-                    
-            userPage = new PageImpl<>(filteredUsers, pageable, filteredUsers.size());
-        }
+                    }
+
+                    if (finalRoleFilter != null && user.getRole() != finalRoleFilter) {
+                        return false;
+                    }
+
+                    // 兼容旧的 status 查询：1 表示普通可用用户，0 表示管理员类用户。
+                    if (status != null) {
+                        boolean enabledUser = user.getRole() == User.Role.USER || user.getRole() == User.Role.DEPT_MEMBER;
+                        return status == 1 ? enabledUser : user.isSuperAdmin();
+                    }
+
+                    return true;
+                })
+                .sorted((left, right) -> {
+                    if (left.getCreatedAt() == null && right.getCreatedAt() == null) {
+                        return 0;
+                    }
+                    if (left.getCreatedAt() == null) {
+                        return 1;
+                    }
+                    if (right.getCreatedAt() == null) {
+                        return -1;
+                    }
+                    return right.getCreatedAt().compareTo(left.getCreatedAt());
+                })
+                .collect(Collectors.toList());
+
+        int start = (int) pageable.getOffset();
+        int end = Math.min((start + pageable.getPageSize()), filteredUsers.size());
+        List<User> pageContent = start < end ? filteredUsers.subList(start, end) : Collections.emptyList();
+        Page<User> userPage = new PageImpl<>(pageContent, pageable, filteredUsers.size());
         
         // 转换为前端需要的格式
         List<Map<String, Object>> userList = userPage.getContent().stream()
@@ -786,8 +811,11 @@ public class UserService {
                     
                     userMap.put("orgTags", orgTagDetails);
                     userMap.put("primaryOrg", user.getPrimaryOrg());
-                    userMap.put("status", user.getRole() == User.Role.USER ? 1 : 0);
+                    userMap.put("role", user.getRole().name());
+                    userMap.put("status", user.getRole() == User.Role.USER || user.getRole() == User.Role.DEPT_MEMBER ? 1 : 0);
                     userMap.put("createdAt", user.getCreatedAt());
+                    userMap.put("createTime", user.getCreatedAt());
+                    userMap.put("updatedAt", user.getUpdatedAt());
                     
                     return userMap;
                 })
@@ -804,4 +832,3 @@ public class UserService {
         return result;
     }
 }
-

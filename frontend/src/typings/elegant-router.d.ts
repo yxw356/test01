@@ -27,8 +27,6 @@ declare module "@elegant-router/types" {
     "iframe-page": "/iframe-page/:url";
     "knowledge-base": "/knowledge-base";
     "login": "/login/:module(pwd-login|code-login|register|reset-pwd|bind-wechat)?";
-    "admin-audit": "/admin-audit";
-    "admin-monitoring": "/admin-monitoring";
     "org-tag": "/org-tag";
     "personal-center": "/personal-center";
     "user": "/user";

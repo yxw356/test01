@@ -60,6 +60,8 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
             // 控制器方法通过@RequestAttribute("userId")获取用户ID
             if (path.matches(".*/upload/chunk.*") || 
                 path.matches(".*/upload/merge.*") || 
+                path.matches(".*/upload/preflight.*") ||
+                path.matches(".*/upload/status.*") || 
                 path.matches(".*/documents/uploads.*") ||
                 path.matches(".*/documents/accessible.*") ||
                 path.matches(".*/search/hybrid.*") ||
@@ -71,6 +73,10 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
                     operation = "分片上传";
                 } else if (path.contains("/merge")) {
                     operation = "合并分片";
+                } else if (path.contains("/preflight")) {
+                    operation = "检查上传依赖";
+                } else if (path.contains("/status")) {
+                    operation = "获取上传状态";
                 } else if (path.contains("/uploads")) {
                     operation = "获取用户文档";
                 } else if (path.contains("/accessible")) {
@@ -169,7 +175,7 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
             }
             
             // 如果是管理员，直接放行
-            if ("ADMIN".equals(role)) {
+            if ("ADMIN".equals(role) || "SUPER_ADMIN".equals(role)) {
                 logger.debug("用户是管理员，放行请求");
                 filterChain.doFilter(request, response);
                 return;

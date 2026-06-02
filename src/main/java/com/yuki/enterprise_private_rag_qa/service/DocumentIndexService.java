@@ -4,6 +4,7 @@ import com.yuki.enterprise_private_rag_qa.config.KafkaConfig;
 import com.yuki.enterprise_private_rag_qa.exception.CustomException;
 import com.yuki.enterprise_private_rag_qa.model.FileProcessingTask;
 import com.yuki.enterprise_private_rag_qa.model.FileUpload;
+import com.yuki.enterprise_private_rag_qa.model.User;
 import com.yuki.enterprise_private_rag_qa.repository.FileUploadRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,30 +24,34 @@ public class DocumentIndexService {
     private final FileUploadRepository fileUploadRepository;
     private final DocumentService documentService;
     private final FileIndexStatusService fileIndexStatusService;
+    private final DocumentPermissionService documentPermissionService;
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private final KafkaConfig kafkaConfig;
 
     public DocumentIndexService(FileUploadRepository fileUploadRepository,
                                 DocumentService documentService,
                                 FileIndexStatusService fileIndexStatusService,
+                                DocumentPermissionService documentPermissionService,
                                 KafkaTemplate<String, Object> kafkaTemplate,
                                 KafkaConfig kafkaConfig) {
         this.fileUploadRepository = fileUploadRepository;
         this.documentService = documentService;
         this.fileIndexStatusService = fileIndexStatusService;
+        this.documentPermissionService = documentPermissionService;
         this.kafkaTemplate = kafkaTemplate;
         this.kafkaConfig = kafkaConfig;
     }
 
     @Transactional
     public void retryIndexing(String fileMd5, String requestUserId, String role) {
-        FileUpload file = resolveFile(fileMd5, requestUserId, role);
+        FileUpload file = resolveFile(fileMd5);
 
         if (file.getStatus() != 1) {
             throw new CustomException("文件尚未上传完成，无法重新索引", HttpStatus.BAD_REQUEST);
         }
 
-        if (!file.getUserId().equals(requestUserId) && !"ADMIN".equals(role)) {
+        User operator = documentPermissionService.requireUser(requestUserId);
+        if (!documentPermissionService.canManage(operator, file)) {
             throw new CustomException("没有权限重新索引此文档", HttpStatus.FORBIDDEN);
         }
 
@@ -61,7 +66,9 @@ public class DocumentIndexService {
                 file.getFileName(),
                 file.getUserId(),
                 file.getOrgTag(),
-                file.isPublic()
+                file.isPublic(),
+                documentPermissionService.effectiveScope(file).name(),
+                documentPermissionService.effectiveDepartmentId(file)
         );
 
         kafkaTemplate.executeInTransaction(kt -> {
@@ -73,12 +80,8 @@ public class DocumentIndexService {
         logger.info("已重新提交索引任务: fileMd5={}, fileName={}, operator={}", fileMd5, file.getFileName(), requestUserId);
     }
 
-    private FileUpload resolveFile(String fileMd5, String requestUserId, String role) {
-        if ("ADMIN".equals(role)) {
-            return fileUploadRepository.findByFileMd5(fileMd5)
-                    .orElseThrow(() -> new CustomException("文档不存在", HttpStatus.NOT_FOUND));
-        }
-        return fileUploadRepository.findByFileMd5AndUserId(fileMd5, requestUserId)
+    private FileUpload resolveFile(String fileMd5) {
+        return fileUploadRepository.findByFileMd5(fileMd5)
                 .orElseThrow(() -> new CustomException("文档不存在", HttpStatus.NOT_FOUND));
     }
 }

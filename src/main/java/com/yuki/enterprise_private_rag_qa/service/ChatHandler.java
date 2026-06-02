@@ -12,6 +12,7 @@ import com.yuki.enterprise_private_rag_qa.utils.AuditSupport;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.socket.TextMessage;
@@ -44,6 +45,8 @@ public class ChatHandler {
     private final AuditService auditService;
     private final OperationMetricsService operationMetricsService;
     private final ConversationService conversationService;
+    private final boolean redisEnabled;
+    private final boolean ragEnabled;
     
     // 用于存储每个会话的完整响应
     private final Map<String, StringBuilder> responseBuilders = new ConcurrentHashMap<>();
@@ -51,6 +54,8 @@ public class ChatHandler {
     private final Map<String, List<SearchResult>> sessionRetrievalResults = new ConcurrentHashMap<>();
     // 用于取消每个会话正在进行的 LLM 流式请求
     private final Map<String, Disposable> activeStreams = new ConcurrentHashMap<>();
+    private final Map<String, String> inMemoryCurrentConversations = new ConcurrentHashMap<>();
+    private final Map<String, List<Map<String, String>>> inMemoryConversationHistory = new ConcurrentHashMap<>();
     // 用于停止时保存已生成的部分回答
     private final Map<String, ActiveResponse> activeResponses = new ConcurrentHashMap<>();
     // 停止标志 - 简单方案
@@ -63,7 +68,9 @@ public class ChatHandler {
                       RagPipeline ragPipeline,
                       AuditService auditService,
                       OperationMetricsService operationMetricsService,
-                      ConversationService conversationService) {
+                      ConversationService conversationService,
+                      @Value("${chat.redis.enabled:true}") boolean redisEnabled,
+                      @Value("${rag.enabled:true}") boolean ragEnabled) {
         this.redisTemplate = redisTemplate;
         this.searchService = searchService;
         this.deepSeekClient = deepSeekClient;
@@ -71,6 +78,8 @@ public class ChatHandler {
         this.auditService = auditService;
         this.operationMetricsService = operationMetricsService;
         this.conversationService = conversationService;
+        this.redisEnabled = redisEnabled;
+        this.ragEnabled = ragEnabled;
         this.objectMapper = new ObjectMapper();
     }
 
@@ -101,7 +110,9 @@ public class ChatHandler {
             String chatHistoryStr = formatChatHistory(history);
 
             // 4. 执行 RAG Pipeline（Stage 1→2→3→4）
-            RagPipeline.RagResult ragResult = ragPipeline.execute(userMessage, userId, chatHistoryStr);
+            RagPipeline.RagResult ragResult = ragEnabled
+                    ? ragPipeline.execute(userMessage, userId, chatHistoryStr)
+                    : emptyRagResult();
             logger.info("RAG Pipeline completed. finalDocs={}, intent={}, usedSupplementary={}, isFallback={}",
                     ragResult.finalDocs().size(),
                     ragResult.queryInfo() != null ? ragResult.queryInfo().getIntent() : "N/A",
@@ -206,6 +217,14 @@ public class ChatHandler {
     }
 
     private String getOrCreateConversationId(String userId) {
+        if (!redisEnabled) {
+            return inMemoryCurrentConversations.computeIfAbsent(userId, id -> {
+                String conversationId = UUID.randomUUID().toString();
+                logger.info("为用户 {} 创建本地内存会话ID: {}", userId, conversationId);
+                return conversationId;
+            });
+        }
+
         String key = "user:" + userId + ":current_conversation";
         String conversationId = redisTemplate.opsForValue().get(key);
         
@@ -221,6 +240,11 @@ public class ChatHandler {
     }
 
     private List<Map<String, String>> getConversationHistory(String conversationId) {
+        if (!redisEnabled) {
+            List<Map<String, String>> history = inMemoryConversationHistory.get(conversationId);
+            return history == null ? new ArrayList<>() : new ArrayList<>(history);
+        }
+
         String key = "conversation:" + conversationId;
         String json = redisTemplate.opsForValue().get(key);
         try {
@@ -307,6 +331,12 @@ public class ChatHandler {
         if (history.size() > 20) {
             history = history.subList(history.size() - 20, history.size());
         }
+
+        if (!redisEnabled) {
+            inMemoryConversationHistory.put(conversationId, new ArrayList<>(history));
+            logger.debug("更新本地内存会话历史，会话ID: {}, 总消息数: {}", conversationId, history.size());
+            return;
+        }
         
         try {
             String json = objectMapper.writeValueAsString(history);
@@ -334,6 +364,10 @@ public class ChatHandler {
             context.append(String.format("[来源#%d: %s]\nparent_id: %s\n%s\n\n", i + 1, fileLabel, parentLabel, snippet));
         }
         return context.toString();
+    }
+
+    private RagPipeline.RagResult emptyRagResult() {
+        return new RagPipeline.RagResult(List.of(), null, List.of(), null, null, false, List.of(), true);
     }
 
     private void sendResponseChunk(WebSocketSession session, String chunk) {

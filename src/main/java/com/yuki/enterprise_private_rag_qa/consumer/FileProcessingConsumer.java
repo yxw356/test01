@@ -50,8 +50,8 @@ public class FileProcessingConsumer {
     @KafkaListener(topics = "#{kafkaConfig.getFileProcessingTopic()}", groupId = "#{kafkaConfig.getFileProcessingGroupId()}")
     public void processTask(FileProcessingTask task) {
         log.info("Received task: {}", task);
-        log.info("文件权限信息: userId={}, orgTag={}, isPublic={}", 
-                task.getUserId(), task.getOrgTag(), task.isPublic());
+        log.info("文件权限信息: userId={}, orgTag={}, isPublic={}, scope={}, departmentId={}",
+                task.getUserId(), task.getOrgTag(), task.isPublic(), task.getKnowledgeScope(), task.getDepartmentId());
                 
         InputStream fileStream = null;
         try {
@@ -71,12 +71,14 @@ public class FileProcessingConsumer {
 
             // 解析文件
             parseService.parseAndSave(task.getFileMd5(), fileStream,
-                    task.getUserId(), task.getOrgTag(), task.isPublic(), task.getFileName());
+                    task.getUserId(), task.getOrgTag(), task.isPublic(), task.getFileName(),
+                    task.getKnowledgeScope(), task.getDepartmentId());
             log.info("文件解析完成，fileMd5: {}", task.getFileMd5());
 
             // 向量化处理
             vectorizationService.vectorize(task.getFileMd5(), 
-                    task.getUserId(), task.getOrgTag(), task.isPublic());
+                    task.getUserId(), task.getOrgTag(), task.isPublic(),
+                    task.getKnowledgeScope(), task.getDepartmentId());
             log.info("向量化完成，fileMd5: {}", task.getFileMd5());
             fileIndexStatusService.markIndexed(task.getFileMd5(), task.getUserId());
             operationMetricsService.recordIndexSuccess();

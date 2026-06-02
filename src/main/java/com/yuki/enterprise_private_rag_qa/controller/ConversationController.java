@@ -7,6 +7,7 @@ import com.yuki.enterprise_private_rag_qa.service.ConversationService;
 import com.yuki.enterprise_private_rag_qa.utils.JwtUtils;
 import com.yuki.enterprise_private_rag_qa.utils.LogUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -35,6 +36,9 @@ public class ConversationController {
 
     @Autowired
     private ConversationService conversationService;
+
+    @Value("${chat.redis.enabled:true}")
+    private boolean redisEnabled;
 
     /**
      * 查询对话历史：优先 MySQL 持久化记录，无数据时回退 Redis 当前会话。
@@ -81,6 +85,10 @@ public class ConversationController {
     }
 
     private List<Map<String, Object>> loadFromRedisFallback(String username, String startDate, String endDate) {
+        if (!redisEnabled) {
+            return new ArrayList<>();
+        }
+
         User user = userRepository.findByUsername(username).orElse(null);
         if (user == null) {
             return List.of();

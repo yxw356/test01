@@ -26,6 +26,9 @@ public class JwtUtils {
     @Value("${jwt.secret-key}")
     private String secretKeyBase64; // 这里存的是 Base64 编码后的密钥
 
+    @Value("${security.token-cache.enabled:true}")
+    private boolean tokenCacheEnabled;
+
     private static final long EXPIRATION_TIME = 3600000; // 1 hour (调整为1小时)
     private static final long REFRESH_TOKEN_EXPIRATION_TIME = 604800000; // 7 days (refresh token有效期)
     private static final long REFRESH_THRESHOLD = 300000; // 5分钟：当剩余时间少于5分钟时开始刷新
@@ -82,8 +85,10 @@ public class JwtUtils {
                 .signWith(key, SignatureAlgorithm.HS256)
                 .compact();
         
-        // 缓存token信息到Redis
-        tokenCacheService.cacheToken(tokenId, user.getId().toString(), username, expireTime);
+        // 缓存token信息到Redis；本地轻量模式可关闭，避免未启动Redis时登录后校验失败
+        if (tokenCacheEnabled) {
+            tokenCacheService.cacheToken(tokenId, user.getId().toString(), username, expireTime);
+        }
         
         logger.info("Token generated and cached for user: {}, tokenId: {}", username, tokenId);
         return token;
@@ -101,10 +106,12 @@ public class JwtUtils {
                 return false;
             }
             
-            // 检查Redis缓存中的token状态
-            if (!tokenCacheService.isTokenValid(tokenId)) {
-                logger.debug("Token invalid in cache: {}", tokenId);
-                return false;
+            if (tokenCacheEnabled) {
+                // 检查Redis缓存中的token状态
+                if (!tokenCacheService.isTokenValid(tokenId)) {
+                    logger.debug("Token invalid in cache: {}", tokenId);
+                    return false;
+                }
             }
             
             // Redis验证通过，再验证JWT签名（双重验证）
@@ -311,7 +318,9 @@ public class JwtUtils {
                 .compact();
         
         // 缓存refresh token信息到Redis
-        tokenCacheService.cacheRefreshToken(refreshTokenId, user.getId().toString(), null, expireTime);
+        if (tokenCacheEnabled) {
+            tokenCacheService.cacheRefreshToken(refreshTokenId, user.getId().toString(), null, expireTime);
+        }
         
         logger.info("Refresh token generated and cached for user: {}, refreshTokenId: {}", username, refreshTokenId);
         return refreshToken;
@@ -329,10 +338,12 @@ public class JwtUtils {
                 return false;
             }
             
-            // 检查Redis缓存中的refresh token状态
-            if (!tokenCacheService.isRefreshTokenValid(refreshTokenId)) {
-                logger.debug("Refresh token invalid in cache: {}", refreshTokenId);
-                return false;
+            if (tokenCacheEnabled) {
+                // 检查Redis缓存中的refresh token状态
+                if (!tokenCacheService.isRefreshTokenValid(refreshTokenId)) {
+                    logger.debug("Refresh token invalid in cache: {}", refreshTokenId);
+                    return false;
+                }
             }
             
             // Redis验证通过，再验证JWT签名
@@ -406,10 +417,12 @@ public class JwtUtils {
                     long expireTime = claims.getExpiration().getTime();
                     String userId = claims.get("userId", String.class);
                     
-                    // 加入黑名单
-                    tokenCacheService.blacklistToken(tokenId, expireTime);
-                    // 从缓存中移除
-                    tokenCacheService.removeToken(tokenId, userId);
+                    if (tokenCacheEnabled) {
+                        // 加入黑名单
+                        tokenCacheService.blacklistToken(tokenId, expireTime);
+                        // 从缓存中移除
+                        tokenCacheService.removeToken(tokenId, userId);
+                    }
                     
                     logger.info("Token invalidated: {}", tokenId);
                 }
@@ -424,7 +437,9 @@ public class JwtUtils {
      */
     public void invalidateAllUserTokens(String userId) {
         try {
-            tokenCacheService.removeAllUserTokens(userId);
+            if (tokenCacheEnabled) {
+                tokenCacheService.removeAllUserTokens(userId);
+            }
             logger.info("All tokens invalidated for user: {}", userId);
         } catch (Exception e) {
             logger.error("Error invalidating all user tokens: {}", userId, e);

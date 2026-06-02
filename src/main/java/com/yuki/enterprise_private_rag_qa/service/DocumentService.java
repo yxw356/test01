@@ -53,6 +53,9 @@ public class DocumentService {
     @Autowired
     private UserRepository userRepository;
 
+    @Autowired
+    private DocumentPermissionService documentPermissionService;
+
     /**
      * 删除文档及其相关数据
      * 该方法将删除:
@@ -69,7 +72,7 @@ public class DocumentService {
         
         try {
             // 获取文件信息以获取文件名
-            FileUpload fileUpload = fileUploadRepository.findByFileMd5AndUserId(fileMd5, userId)
+            FileUpload fileUpload = fileUploadRepository.findByFileMd5(fileMd5)
                     .orElseThrow(() -> new RuntimeException("文件不存在"));
             
             // 1. 删除Elasticsearch中的数据
@@ -128,27 +131,10 @@ public class DocumentService {
         logger.info("获取用户可访问文件列表: userId={}", userId);
         
         try {
-            User user;
-            if (userId != null && userId.chars().allMatch(Character::isDigit)) {
-                user = userRepository.findById(Long.parseLong(userId))
-                    .orElseThrow(() -> new RuntimeException("用户不存在: " + userId));
-            } else {
-                user = userRepository.findByUsername(userId)
-                    .orElseThrow(() -> new RuntimeException("用户不存在: " + userId));
-            }
-            
-            String effectiveUserId = String.valueOf(user.getId());
-            List<String> userEffectiveTags = orgTagCacheService.getUserEffectiveOrgTags(user.getUsername());
-            logger.debug("用户有效组织标签: {}", userEffectiveTags);
-            
-            List<FileUpload> files;
-            if (userEffectiveTags.isEmpty()) {
-                files = fileUploadRepository.findByUserIdOrIsPublicTrue(effectiveUserId);
-                logger.debug("用户无组织标签，仅返回个人和公开文件");
-            } else {
-                files = fileUploadRepository.findAccessibleFilesWithTags(effectiveUserId, userEffectiveTags);
-                logger.debug("使用有效组织标签查询文件");
-            }
+            User user = documentPermissionService.requireUser(userId);
+            List<FileUpload> files = fileUploadRepository.findAll().stream()
+                    .filter(file -> documentPermissionService.canView(user, file))
+                    .collect(Collectors.toList());
             
             logger.info("成功获取用户可访问文件列表: userId={}, fileCount={}", userId, files.size());
             return files;

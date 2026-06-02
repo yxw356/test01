@@ -54,6 +54,19 @@ public class DocumentVector {
      */
     @Column(name = "org_tag", length = 50)
     private String orgTag;
+
+    /**
+     * 知识范围：PUBLIC公共知识、DEPARTMENT部门知识、PRIVATE个人知识。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "knowledge_scope", nullable = false)
+    private FileUpload.KnowledgeScope knowledgeScope = FileUpload.KnowledgeScope.DEPARTMENT;
+
+    /**
+     * 部门专有知识所属部门。第一阶段复用组织标签ID。
+     */
+    @Column(name = "department_id", length = 50)
+    private String departmentId;
     
     /**
      * 文件是否公开

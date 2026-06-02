@@ -15,9 +15,11 @@ import com.yuki.enterprise_private_rag_qa.exception.CustomException;
 import com.yuki.enterprise_private_rag_qa.model.AuditAction;
 import com.yuki.enterprise_private_rag_qa.model.FileUpload;
 import com.yuki.enterprise_private_rag_qa.model.OrganizationTag;
+import com.yuki.enterprise_private_rag_qa.model.User;
 import com.yuki.enterprise_private_rag_qa.repository.FileUploadRepository;
 import com.yuki.enterprise_private_rag_qa.repository.OrganizationTagRepository;
 import com.yuki.enterprise_private_rag_qa.service.AuditService;
+import com.yuki.enterprise_private_rag_qa.service.DocumentPermissionService;
 import com.yuki.enterprise_private_rag_qa.service.DocumentIndexService;
 import com.yuki.enterprise_private_rag_qa.service.DocumentService;
 import com.yuki.enterprise_private_rag_qa.utils.AuditSupport;
@@ -60,6 +62,55 @@ public class DocumentController {
     @Autowired
     private DocumentIndexService documentIndexService;
 
+    @Autowired
+    private DocumentPermissionService documentPermissionService;
+
+    private Optional<FileUpload> findViewableFileByName(String fileName, String userIdOrUsername) {
+        List<FileUpload> candidates = fileUploadRepository.findByFileName(fileName);
+        if (candidates.isEmpty()) {
+            return Optional.empty();
+        }
+
+        if (userIdOrUsername == null || userIdOrUsername.isBlank()) {
+            return candidates.stream()
+                    .filter(file -> documentPermissionService.effectiveScope(file) == FileUpload.KnowledgeScope.PUBLIC || file.isPublic())
+                    .findFirst();
+        }
+
+        User user = documentPermissionService.requireUser(userIdOrUsername);
+        return candidates.stream()
+                .filter(file -> documentPermissionService.canView(user, file))
+                .findFirst();
+    }
+
+    private ResponseEntity<Map<String, Object>> notFoundOrForbidden(String message) {
+        Map<String, Object> response = new HashMap<>();
+        response.put("code", HttpStatus.NOT_FOUND.value());
+        response.put("message", message);
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+    }
+
+    private Map<String, Object> toDocumentDto(FileUpload file, User currentUser) {
+        Map<String, Object> dto = new HashMap<>();
+        dto.put("fileMd5", file.getFileMd5());
+        dto.put("fileName", file.getFileName());
+        dto.put("totalSize", file.getTotalSize());
+        dto.put("status", file.getStatus());
+        dto.put("indexStatus", file.getIndexStatus());
+        dto.put("indexError", file.getIndexError());
+        dto.put("userId", file.getUserId());
+        dto.put("public", file.isPublic());
+        dto.put("knowledgeScope", documentPermissionService.effectiveScope(file).name());
+        dto.put("departmentId", documentPermissionService.effectiveDepartmentId(file));
+        dto.put("canView", documentPermissionService.canView(currentUser, file));
+        dto.put("canManage", documentPermissionService.canManage(currentUser, file));
+        dto.put("createdAt", file.getCreatedAt());
+        dto.put("mergedAt", file.getMergedAt());
+        String orgTagName = getOrgTagName(documentPermissionService.effectiveDepartmentId(file));
+        dto.put("orgTagName", orgTagName);
+        return dto;
+    }
+
     /**
      * 删除文档及其相关数据
      * 
@@ -80,7 +131,7 @@ public class DocumentController {
             LogUtils.logBusiness("DELETE_DOCUMENT", userId, "接收到删除文档请求: fileMd5=%s, role=%s", fileMd5, role);
             
             // 获取文件信息
-            Optional<FileUpload> fileOpt = fileUploadRepository.findByFileMd5AndUserId(fileMd5, userId);
+            Optional<FileUpload> fileOpt = fileUploadRepository.findByFileMd5(fileMd5);
             if (fileOpt.isEmpty()) {
                 LogUtils.logUserOperation(userId, "DELETE_DOCUMENT", fileMd5, "FAILED_NOT_FOUND");
                 monitor.end("删除失败：文档不存在");
@@ -92,8 +143,8 @@ public class DocumentController {
             
             FileUpload file = fileOpt.get();
             
-            // 权限检查：只有文件所有者或管理员可以删除
-            if (!file.getUserId().equals(userId) && !"ADMIN".equals(role)) {
+            // 权限检查：文件所有者、部门负责人或超级管理员可以删除
+            if (!documentPermissionService.canManage(documentPermissionService.requireUser(userId), file)) {
                 LogUtils.logUserOperation(userId, "DELETE_DOCUMENT", fileMd5, "FAILED_PERMISSION_DENIED");
                 LogUtils.logBusiness("DELETE_DOCUMENT", userId, "用户无权删除文档: fileMd5=%s, fileOwner=%s", fileMd5, file.getUserId());
                 monitor.end("删除失败：权限不足");
@@ -167,23 +218,11 @@ public class DocumentController {
         try {
             LogUtils.logBusiness("GET_ACCESSIBLE_FILES", userId, "接收到获取可访问文件请求: orgTags=%s", orgTags);
             
+            User currentUser = documentPermissionService.requireUser(userId);
             List<FileUpload> files = documentService.getAccessibleFiles(userId, orgTags);
-            List<Map<String, Object>> fileData = files.stream().map(file -> {
-                Map<String, Object> dto = new HashMap<>();
-                dto.put("fileMd5", file.getFileMd5());
-                dto.put("fileName", file.getFileName());
-                dto.put("totalSize", file.getTotalSize());
-                dto.put("status", file.getStatus());
-                dto.put("indexStatus", file.getIndexStatus());
-                dto.put("indexError", file.getIndexError());
-                dto.put("userId", file.getUserId());
-                dto.put("public", file.isPublic());
-                dto.put("createdAt", file.getCreatedAt());
-                dto.put("mergedAt", file.getMergedAt());
-                String orgTagName = getOrgTagName(file.getOrgTag());
-                dto.put("orgTagName", orgTagName);
-                return dto;
-            }).collect(Collectors.toList());
+            List<Map<String, Object>> fileData = files.stream()
+                    .map(file -> toDocumentDto(file, currentUser))
+                    .collect(Collectors.toList());
             
             LogUtils.logUserOperation(userId, "GET_ACCESSIBLE_FILES", "file_list", "SUCCESS");
             LogUtils.logBusiness("GET_ACCESSIBLE_FILES", userId, "成功获取可访问文件: fileCount=%d", files.size());
@@ -218,28 +257,13 @@ public class DocumentController {
         try {
             LogUtils.logBusiness("GET_USER_UPLOADED_FILES", userId, "接收到获取用户上传文件请求");
             
+            User currentUser = documentPermissionService.requireUser(userId);
             List<FileUpload> files = documentService.getUserUploadedFiles(userId);
             
             // 将FileUpload转换为包含tagName的DTO
-            List<Map<String, Object>> fileData = files.stream().map(file -> {
-                Map<String, Object> dto = new HashMap<>();
-                dto.put("fileMd5", file.getFileMd5());
-                dto.put("fileName", file.getFileName());
-                dto.put("totalSize", file.getTotalSize());
-                dto.put("status", file.getStatus());
-                dto.put("indexStatus", file.getIndexStatus());
-                dto.put("indexError", file.getIndexError());
-                dto.put("userId", file.getUserId());
-                dto.put("public", file.isPublic());
-                dto.put("createdAt", file.getCreatedAt());
-                dto.put("mergedAt", file.getMergedAt());
-                
-                // 将orgTag从tagId转换为tagName
-                String orgTagName = getOrgTagName(file.getOrgTag());
-                dto.put("orgTagName", orgTagName);
-                
-                return dto;
-            }).collect(Collectors.toList());
+            List<Map<String, Object>> fileData = files.stream()
+                    .map(file -> toDocumentDto(file, currentUser))
+                    .collect(Collectors.toList());
             
             LogUtils.logUserOperation(userId, "GET_USER_UPLOADED_FILES", "file_list", "SUCCESS");
             LogUtils.logBusiness("GET_USER_UPLOADED_FILES", userId, "成功获取用户上传文件: fileCount=%d", files.size());
@@ -277,14 +301,11 @@ public class DocumentController {
         try {
             // 验证token并获取用户信息
             String userId = null;
-            String orgTags = null;
-            
             if (token != null && !token.trim().isEmpty()) {
                 try {
                     // 解析JWT token获取用户信息
                     // 注意：JWT中的sub字段存储用户名，userId字段存储用户ID（但有时可能存储的是用户名）
                     userId = jwtUtils.extractUsernameFromToken(token);
-                    orgTags = jwtUtils.extractOrgTagsFromToken(token);
                 } catch (Exception e) {
                     LogUtils.logBusiness("DOWNLOAD_FILE_BY_NAME", "anonymous", "Token解析失败: fileName=%s", fileName);
                 }
@@ -292,53 +313,11 @@ public class DocumentController {
             
             LogUtils.logBusiness("DOWNLOAD_FILE_BY_NAME", userId != null ? userId : "anonymous", "接收到文件下载请求: fileName=%s", fileName);
             
-            // 如果没有提供token或token无效，只允许下载公开文件
-            if (userId == null) {
-                // 查找公开文件
-                Optional<FileUpload> publicFile = fileUploadRepository.findByFileNameAndIsPublicTrue(fileName);
-                if (publicFile.isEmpty()) {
-                    Map<String, Object> response = new HashMap<>();
-                    response.put("code", HttpStatus.NOT_FOUND.value());
-                    response.put("message", "文件不存在或需要登录访问");
-                    return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
-                }
-                
-                FileUpload file = publicFile.get();
-                String downloadUrl = documentService.generateDownloadUrl(file.getFileMd5());
-                
-                if (downloadUrl == null) {
-                    Map<String, Object> response = new HashMap<>();
-                    response.put("code", HttpStatus.INTERNAL_SERVER_ERROR.value());
-                    response.put("message", "无法生成下载链接");
-                    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
-                }
-                
-                Map<String, Object> response = new HashMap<>();
-                response.put("code", 200);
-                response.put("message", "文件下载链接生成成功");
-                response.put("data", Map.of(
-                    "fileName", file.getFileName(),
-                    "downloadUrl", downloadUrl,
-                    "fileSize", file.getTotalSize()
-                ));
-                return ResponseEntity.ok(response);
-            }
-            
-            // 有token的情况，查找用户可访问的文件
-            List<FileUpload> accessibleFiles = documentService.getAccessibleFiles(userId, orgTags);
-            
-            // 根据文件名查找匹配的文件
-            Optional<FileUpload> targetFile = accessibleFiles.stream()
-                    .filter(file -> file.getFileName().equals(fileName))
-                    .findFirst();
-                    
+            Optional<FileUpload> targetFile = findViewableFileByName(fileName, userId);
             if (targetFile.isEmpty()) {
                 LogUtils.logUserOperation(userId, "DOWNLOAD_FILE_BY_NAME", fileName, "FAILED_NOT_FOUND");
                 monitor.end("下载失败：文件不存在或无权限访问");
-                Map<String, Object> response = new HashMap<>();
-                response.put("code", HttpStatus.NOT_FOUND.value());
-                response.put("message", "文件不存在或无权限访问");
-                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+                return notFoundOrForbidden(userId == null ? "文件不存在或需要登录访问" : "文件不存在或无权限访问");
             }
             
             FileUpload file = targetFile.get();
@@ -405,8 +384,6 @@ public class DocumentController {
         try {
             // 验证token并获取用户信息
             String userId = null;
-            String orgTags = null;
-            
             // 优先从Spring Security上下文获取已认证的用户信息
             try {
                 var authentication = SecurityContextHolder.getContext().getAuthentication();
@@ -414,11 +391,6 @@ public class DocumentController {
                     && authentication.getPrincipal() instanceof UserDetails) {
                     UserDetails userDetails = (UserDetails) authentication.getPrincipal();
                     userId = userDetails.getUsername();
-                    // 从userDetails中获取组织标签信息
-                    orgTags = userDetails.getAuthorities().stream()
-                        .map(auth -> auth.getAuthority().replace("ROLE_", ""))
-                        .findFirst()
-                        .orElse(null);
                 }
             } catch (Exception e) {
                 LogUtils.logBusiness("PREVIEW_FILE_BY_NAME", "anonymous", "Security上下文获取失败: fileName=%s", fileName);
@@ -428,7 +400,6 @@ public class DocumentController {
             if (userId == null && token != null && !token.trim().isEmpty()) {
                 try {
                     userId = jwtUtils.extractUsernameFromToken(token);
-                    orgTags = jwtUtils.extractOrgTagsFromToken(token);
                 } catch (Exception e) {
                     LogUtils.logBusiness("PREVIEW_FILE_BY_NAME", "anonymous", "Token解析失败: fileName=%s", fileName);
                 }
@@ -436,52 +407,11 @@ public class DocumentController {
             
             LogUtils.logBusiness("PREVIEW_FILE_BY_NAME", userId != null ? userId : "anonymous", "接收到文件预览请求: fileName=%s", fileName);
             
-            // 如果没有提供token或token无效，只允许预览公开文件
-            if (userId == null) {
-                Optional<FileUpload> publicFile = fileUploadRepository.findByFileNameAndIsPublicTrue(fileName);
-                if (publicFile.isEmpty()) {
-                    Map<String, Object> response = new HashMap<>();
-                    response.put("code", HttpStatus.NOT_FOUND.value());
-                    response.put("message", "文件不存在或需要登录访问");
-                    return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
-                }
-                
-                FileUpload file = publicFile.get();
-                String previewContent = documentService.getFilePreviewContent(file.getFileMd5(), file.getFileName());
-                
-                if (previewContent == null) {
-                    Map<String, Object> response = new HashMap<>();
-                    response.put("code", HttpStatus.INTERNAL_SERVER_ERROR.value());
-                    response.put("message", "无法获取文件预览内容");
-                    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
-                }
-                
-                Map<String, Object> response = new HashMap<>();
-                response.put("code", 200);
-                response.put("message", "文件预览内容获取成功");
-                response.put("data", Map.of(
-                    "fileName", file.getFileName(),
-                    "content", previewContent,
-                    "fileSize", file.getTotalSize()
-                ));
-                return ResponseEntity.ok(response);
-            }
-            
-            // 有token的情况，查找用户可访问的文件
-            List<FileUpload> accessibleFiles = documentService.getAccessibleFiles(userId, orgTags);
-            
-            // 根据文件名查找匹配的文件
-            Optional<FileUpload> targetFile = accessibleFiles.stream()
-                    .filter(file -> file.getFileName().equals(fileName))
-                    .findFirst();
-                    
+            Optional<FileUpload> targetFile = findViewableFileByName(fileName, userId);
             if (targetFile.isEmpty()) {
                 LogUtils.logUserOperation(userId, "PREVIEW_FILE_BY_NAME", fileName, "FAILED_NOT_FOUND");
                 monitor.end("预览失败：文件不存在或无权限访问");
-                Map<String, Object> response = new HashMap<>();
-                response.put("code", HttpStatus.NOT_FOUND.value());
-                response.put("message", "文件不存在或无权限访问");
-                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+                return notFoundOrForbidden(userId == null ? "文件不存在或需要登录访问" : "文件不存在或无权限访问");
             }
             
             FileUpload file = targetFile.get();

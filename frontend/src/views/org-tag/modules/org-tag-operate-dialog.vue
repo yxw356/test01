@@ -21,9 +21,9 @@ const { defaultRequiredRule } = useFormRules();
 
 const title = computed(() => {
   const titles: Record<NaiveUI.TableOperateType, string> = {
-    add: '新增',
-    edit: '编辑',
-    addChild: '新增下级'
+    add: '新增部门',
+    edit: '编辑部门',
+    addChild: '新增下级部门'
   };
   return titles[props.operateType];
 });
@@ -46,7 +46,7 @@ const rules = ref<FormRules>({
       validator(_, value) {
         return !value.startsWith('PRIVATE_');
       },
-      message: '标签Id不能以PRIVATE_开头',
+      message: '部门编码不能以PRIVATE_开头',
       trigger: 'blur'
     }
   ],
@@ -99,20 +99,20 @@ watch(visible, () => {
     @positive-click="handleSubmit"
   >
     <NForm ref="formRef" :model="model" :rules="rules" label-placement="left" :label-width="100" mt-10>
-      <NFormItem label="标签Id" path="tagId">
-        <NInput v-model:value="model.tagId" placeholder="请输入标签Id" maxlength="60" />
+      <NFormItem label="部门编码" path="tagId">
+        <NInput v-model:value="model.tagId" placeholder="请输入部门编码" maxlength="60" />
       </NFormItem>
-      <NFormItem label="标签名称" path="name">
-        <NInput v-model:value="model.name" placeholder="请输入标签名称" maxlength="60" />
+      <NFormItem label="部门名称" path="name">
+        <NInput v-model:value="model.name" placeholder="请输入部门名称" maxlength="60" />
       </NFormItem>
-      <NFormItem label="所属标签" path="parentTag">
+      <NFormItem label="上级部门" path="parentTag">
         <OrgTagCascader v-model:value="model.parentTag" :options="data" />
       </NFormItem>
-      <NFormItem label="标签描述" path="description">
+      <NFormItem label="部门描述" path="description">
         <NInput
           v-model:value="model.description"
           type="textarea"
-          placeholder="请输入标签描述"
+          placeholder="请输入部门描述"
           maxlength="300"
           clearable
           show-count

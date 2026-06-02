@@ -6,11 +6,11 @@ const status = ref<Api.Admin.MonitoringStatus | null>(null);
 
 async function fetchStatus() {
   loading.value = true;
-  const { error, data: response } = await request<{ data: Api.Admin.MonitoringStatus }>({
+  const { error, data: response } = await request<Api.Admin.MonitoringStatus>({
     url: '/admin/monitoring/status'
   });
-  if (!error && response?.data) {
-    status.value = response.data;
+  if (!error && response) {
+    status.value = response;
   }
   loading.value = false;
 }
@@ -31,6 +31,7 @@ function componentCards() {
   const c = components.value;
   return [
     { key: 'redis', label: 'Redis', data: c.redis },
+    { key: 'minio', label: 'MinIO', data: c.minio },
     { key: 'elasticsearch', label: 'Elasticsearch', data: c.elasticsearch },
     { key: 'vllmChat', label: '对话模型', data: c.vllmChat },
     { key: 'vllmEmbedding', label: '向量模型', data: c.vllmEmbedding },

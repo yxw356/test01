@@ -34,6 +34,12 @@
       "orgTag": {
         "type": "keyword"
       },
+      "knowledgeScope": {
+        "type": "keyword"
+      },
+      "departmentId": {
+        "type": "keyword"
+      },
       "isPublic": {
         "type": "boolean"
       }

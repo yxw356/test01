@@ -4,6 +4,7 @@ import com.hankcs.hanlp.seg.common.Term;
 import com.hankcs.hanlp.tokenizer.StandardTokenizer;
 import com.yuki.enterprise_private_rag_qa.client.EmbeddingClient;
 import com.yuki.enterprise_private_rag_qa.model.DocumentVector;
+import com.yuki.enterprise_private_rag_qa.model.FileUpload;
 import com.yuki.enterprise_private_rag_qa.repository.DocumentVectorRepository;
 import org.apache.tika.exception.TikaException;
 import org.apache.tika.metadata.Metadata;
@@ -71,8 +72,16 @@ public class ParseService {
     public void parseAndSave(String fileMd5, InputStream fileStream,
                              String userId, String orgTag, boolean isPublic, String fileName)
             throws IOException, TikaException {
-        logger.info("开始解析文件，fileMd5: {}, fileName: {}, userId: {}, orgTag: {}, isPublic: {}",
-                fileMd5, fileName, userId, orgTag, isPublic);
+        parseAndSave(fileMd5, fileStream, userId, orgTag, isPublic, fileName,
+                defaultKnowledgeScope(isPublic), orgTag);
+    }
+
+    public void parseAndSave(String fileMd5, InputStream fileStream,
+                             String userId, String orgTag, boolean isPublic, String fileName,
+                             String knowledgeScope, String departmentId)
+            throws IOException, TikaException {
+        logger.info("开始解析文件，fileMd5: {}, fileName: {}, userId: {}, orgTag: {}, isPublic: {}, scope: {}, departmentId: {}",
+                fileMd5, fileName, userId, orgTag, isPublic, knowledgeScope, departmentId);
 
         checkMemoryThreshold();
         documentVectorRepository.deleteByFileMd5(fileMd5);
@@ -80,13 +89,14 @@ public class ParseService {
 
         if (tabularParseService.isTabular(fileName)) {
             String tableText = tabularParseService.extractText(fileStream, fileName);
-            parsePlainTextAndSave(fileMd5, tableText, userId, orgTag, isPublic);
+            parsePlainTextAndSave(fileMd5, tableText, userId, orgTag, isPublic, knowledgeScope, departmentId);
             logger.info("表格文件解析完成，fileMd5: {}", fileMd5);
             return;
         }
 
         try (BufferedInputStream bufferedStream = new BufferedInputStream(fileStream, bufferSize)) {
-            StreamingContentHandler handler = new StreamingContentHandler(fileMd5, userId, orgTag, isPublic);
+            StreamingContentHandler handler = new StreamingContentHandler(
+                    fileMd5, userId, orgTag, isPublic, knowledgeScope, departmentId);
             Metadata metadata = new Metadata();
             ParseContext context = new ParseContext();
             AutoDetectParser parser = new AutoDetectParser();
@@ -110,6 +120,11 @@ public class ParseService {
      * 将已提取的纯文本按父块/子块结构入库（表格解析等场景复用）。
      */
     public void parsePlainTextAndSave(String fileMd5, String text, String userId, String orgTag, boolean isPublic) {
+        parsePlainTextAndSave(fileMd5, text, userId, orgTag, isPublic, defaultKnowledgeScope(isPublic), orgTag);
+    }
+
+    public void parsePlainTextAndSave(String fileMd5, String text, String userId, String orgTag, boolean isPublic,
+                                      String knowledgeScope, String departmentId) {
         if (text == null || text.isBlank()) {
             logger.warn("纯文本为空，跳过入库，fileMd5: {}", fileMd5);
             return;
@@ -125,7 +140,8 @@ public class ParseService {
             String parentId = fileMd5 + "_p_" + savedParentCount;
             List<String> childChunks = splitTextIntoChunksWithSemantics(parentChunk, effectiveChildMaxChunkSize());
             savedChunkCount = saveChildChunks(
-                    fileMd5, parentId, parentChunk, childChunks, userId, orgTag, isPublic, savedChunkCount
+                    fileMd5, parentId, parentChunk, childChunks, userId, orgTag, isPublic,
+                    knowledgeScope, departmentId, savedChunkCount
             );
         }
         logger.info("纯文本分块入库完成，fileMd5: {}, parentCount={}, chunkCount={}",
@@ -161,15 +177,20 @@ public class ParseService {
         private final String userId;
         private final String orgTag;
         private final boolean isPublic;
+        private final String knowledgeScope;
+        private final String departmentId;
         private int savedChunkCount = 0;
         private int savedParentCount = 0;
 
-        public StreamingContentHandler(String fileMd5, String userId, String orgTag, boolean isPublic) {
+        public StreamingContentHandler(String fileMd5, String userId, String orgTag, boolean isPublic,
+                                       String knowledgeScope, String departmentId) {
             super(-1);
             this.fileMd5 = fileMd5;
             this.userId = userId;
             this.orgTag = orgTag;
             this.isPublic = isPublic;
+            this.knowledgeScope = knowledgeScope;
+            this.departmentId = departmentId;
         }
 
         @Override
@@ -221,6 +242,8 @@ public class ParseService {
                         userId,
                         orgTag,
                         isPublic,
+                        knowledgeScope,
+                        departmentId,
                         savedChunkCount
                 );
             }
@@ -251,8 +274,11 @@ public class ParseService {
     }
 
     private int saveChildChunks(String fileMd5, String parentId, String parentText, List<String> chunks,
-                                String userId, String orgTag, boolean isPublic, int startingChunkId) {
+                                String userId, String orgTag, boolean isPublic,
+                                String knowledgeScope, String departmentId, int startingChunkId) {
         int currentChunkId = startingChunkId;
+        FileUpload.KnowledgeScope resolvedScope = resolveKnowledgeScope(knowledgeScope, isPublic);
+        String resolvedDepartmentId = isBlank(departmentId) ? orgTag : departmentId;
         for (String chunk : chunks) {
             if (chunk == null || chunk.isBlank()) {
                 continue;
@@ -267,10 +293,27 @@ public class ParseService {
             vector.setUserId(userId);
             vector.setOrgTag(orgTag);
             vector.setPublic(isPublic);
+            vector.setKnowledgeScope(resolvedScope);
+            vector.setDepartmentId(resolvedDepartmentId);
             documentVectorRepository.save(vector);
         }
         logger.info("成功保存 {} 个子块到数据库，parentId: {}", chunks.size(), parentId);
         return currentChunkId;
+    }
+
+    private String defaultKnowledgeScope(boolean isPublic) {
+        return isPublic ? FileUpload.KnowledgeScope.PUBLIC.name() : FileUpload.KnowledgeScope.DEPARTMENT.name();
+    }
+
+    private FileUpload.KnowledgeScope resolveKnowledgeScope(String knowledgeScope, boolean isPublic) {
+        if (!isBlank(knowledgeScope)) {
+            try {
+                return FileUpload.KnowledgeScope.valueOf(knowledgeScope.trim().toUpperCase());
+            } catch (IllegalArgumentException ignored) {
+                logger.warn("未知知识范围 {}，按旧公开标记降级处理", knowledgeScope);
+            }
+        }
+        return isPublic ? FileUpload.KnowledgeScope.PUBLIC : FileUpload.KnowledgeScope.DEPARTMENT;
     }
 
     /**
@@ -494,6 +537,10 @@ public class ParseService {
         if (value != null && !value.isBlank()) {
             target.add(value.trim());
         }
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private boolean isTitleLine(String line) {
