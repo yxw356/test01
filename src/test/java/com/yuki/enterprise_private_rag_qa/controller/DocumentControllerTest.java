@@ -24,12 +24,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class DocumentControllerTest {
 
     private DocumentController controller;
     private DocumentService documentService;
+    private DocumentIndexService documentIndexService;
     private UserRepository userRepository;
     private OrgTagCacheService orgTagCacheService;
     private OrganizationTagRepository organizationTagRepository;
@@ -49,7 +51,8 @@ class DocumentControllerTest {
         ReflectionTestUtils.setField(controller, "organizationTagRepository", organizationTagRepository);
         ReflectionTestUtils.setField(controller, "jwtUtils", mock(JwtUtils.class));
         ReflectionTestUtils.setField(controller, "auditService", mock(AuditService.class));
-        ReflectionTestUtils.setField(controller, "documentIndexService", mock(DocumentIndexService.class));
+        documentIndexService = mock(DocumentIndexService.class);
+        ReflectionTestUtils.setField(controller, "documentIndexService", documentIndexService);
         ReflectionTestUtils.setField(controller, "documentPermissionService", permissionService);
     }
 
@@ -63,6 +66,13 @@ class DocumentControllerTest {
         when(organizationTagRepository.findByTagId("OPS")).thenReturn(Optional.empty());
 
         FileUpload ownDepartmentDocument = document("1", "own.md", FileUpload.KnowledgeScope.DEPARTMENT, "FIN", false);
+        ownDepartmentDocument.setCategoryId(9L);
+        ownDepartmentDocument.setCategoryName("财务流程");
+        ownDepartmentDocument.setCleaningStatus(FileUpload.CleaningStatus.CLEANED);
+        ownDepartmentDocument.setOriginalChars(120);
+        ownDepartmentDocument.setCleanedChars(100);
+        ownDepartmentDocument.setRemovedChars(20);
+        ownDepartmentDocument.setDuplicateLinesRemoved(2);
         FileUpload publicDocument = document("2", "public.md", FileUpload.KnowledgeScope.PUBLIC, "OPS", true);
         when(documentService.getAccessibleFiles("1", "FIN")).thenReturn(List.of(ownDepartmentDocument, publicDocument));
 
@@ -76,11 +86,57 @@ class DocumentControllerTest {
         assertTrue((Boolean) data.get(0).get("canManage"));
         assertEquals("DEPARTMENT", data.get(0).get("knowledgeScope"));
         assertEquals("FIN", data.get(0).get("departmentId"));
+        assertEquals(9L, data.get(0).get("categoryId"));
+        assertEquals("财务流程", data.get(0).get("categoryName"));
+        assertEquals("CLEANED", data.get(0).get("cleaningStatus"));
+        assertEquals(120, data.get(0).get("originalChars"));
+        assertEquals(100, data.get(0).get("cleanedChars"));
+        assertEquals(20, data.get(0).get("removedChars"));
+        assertEquals(2, data.get(0).get("duplicateLinesRemoved"));
 
         assertTrue((Boolean) data.get(1).get("canView"));
         assertFalse((Boolean) data.get(1).get("canManage"));
         assertEquals("PUBLIC", data.get(1).get("knowledgeScope"));
         assertEquals("OPS", data.get(1).get("departmentId"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void retryCleaningEndpointSubmitsCleaningAndIndexingTask() {
+        ResponseEntity<?> response = controller.retryCleaning(
+                "abc123abc123abc123abc123abc123ab",
+                "99",
+                "DEPT_LEAD"
+        );
+
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals(200, body.get("code"));
+        assertEquals("清洗与索引任务已重新提交", body.get("message"));
+        verify(documentIndexService).retryCleaningAndIndexing(
+                "abc123abc123abc123abc123abc123ab",
+                "99",
+                "DEPT_LEAD"
+        );
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void retryCleaningEndpointCanSwitchCleaningRuleSet() {
+        ResponseEntity<?> response = controller.retryCleaning(
+                "abc123abc123abc123abc123abc123ab",
+                "99",
+                "DEPT_LEAD",
+                new DocumentController.RecleanRequest(12L)
+        );
+
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals(200, body.get("code"));
+        verify(documentIndexService).retryCleaningAndIndexing(
+                "abc123abc123abc123abc123abc123ab",
+                "99",
+                "DEPT_LEAD",
+                12L
+        );
     }
 
     private User user(Long id, String username, User.Role role, String orgTags) {

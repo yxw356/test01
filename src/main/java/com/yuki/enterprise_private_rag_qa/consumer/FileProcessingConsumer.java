@@ -72,13 +72,14 @@ public class FileProcessingConsumer {
             // 解析文件
             parseService.parseAndSave(task.getFileMd5(), fileStream,
                     task.getUserId(), task.getOrgTag(), task.isPublic(), task.getFileName(),
-                    task.getKnowledgeScope(), task.getDepartmentId());
+                    task.getKnowledgeScope(), task.getDepartmentId(), task.getCategoryId(), task.getCategoryName(),
+                    task.getCleaningRuleSetId());
             log.info("文件解析完成，fileMd5: {}", task.getFileMd5());
 
             // 向量化处理
             vectorizationService.vectorize(task.getFileMd5(), 
                     task.getUserId(), task.getOrgTag(), task.isPublic(),
-                    task.getKnowledgeScope(), task.getDepartmentId());
+                    task.getKnowledgeScope(), task.getDepartmentId(), task.getCategoryId(), task.getCategoryName());
             log.info("向量化完成，fileMd5: {}", task.getFileMd5());
             fileIndexStatusService.markIndexed(task.getFileMd5(), task.getUserId());
             operationMetricsService.recordIndexSuccess();

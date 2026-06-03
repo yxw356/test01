@@ -15,6 +15,10 @@ const authStore = useAuthStore();
 // 文件预览相关状态
 const previewVisible = ref(false);
 const previewFileName = ref('');
+const cleaningDetailVisible = ref(false);
+const cleaningDetailTask = ref<Api.KnowledgeBase.UploadTask | null>(null);
+const recleaning = ref(false);
+const recleanRuleSetId = ref<number | null>(null);
 
 function apiFn() {
   return fakePaginationRequest<Api.KnowledgeBase.List>({ url: '/documents/accessible' });
@@ -39,6 +43,15 @@ function handleFilePreview(fileName: string) {
 function closeFilePreview() {
   previewVisible.value = false;
   previewFileName.value = '';
+}
+
+async function openCleaningDetail(row: Api.KnowledgeBase.UploadTask) {
+  cleaningDetailTask.value = row;
+  recleanRuleSetId.value = row.cleaningRuleSetId ?? null;
+  cleaningDetailVisible.value = true;
+  if (cleaningRuleSets.value.length === 0) {
+    await store.refreshCleaningRuleSets();
+  }
 }
 
 const { columns, columnChecks, data, getData, loading } = useTable({
@@ -82,10 +95,22 @@ const { columns, columnChecks, data, getData, loading } = useTable({
       render: row => renderIndexStatus(row)
     },
     {
+      key: 'cleaningStatus',
+      title: '清洗状态',
+      width: 130,
+      render: row => renderCleaningStatus(row)
+    },
+    {
       key: 'knowledgeScope',
       title: '知识类型',
       width: 120,
       render: row => renderKnowledgeScope(row)
+    },
+    {
+      key: 'categoryName',
+      title: '知识分类',
+      width: 140,
+      render: row => renderCategory(row)
     },
     {
       key: 'orgTagName',
@@ -125,11 +150,13 @@ const { columns, columnChecks, data, getData, loading } = useTable({
 
 const store = useKnowledgeBaseStore();
 const { tasks, uploadPreflight, uploadPreflightLoading } = storeToRefs(store);
+const { categories, cleaningRuleSets, cleaningRuleSetLoading } = storeToRefs(store);
 
 const filterModel = reactive({
   keyword: '',
   knowledgeScope: null as 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE' | null,
-  departmentId: null as string | null
+  departmentId: null as string | null,
+  categoryId: null as number | null
 });
 
 const knowledgeScopeOptions = [
@@ -137,6 +164,29 @@ const knowledgeScopeOptions = [
   { label: '部门知识', value: 'DEPARTMENT' },
   { label: '私人知识', value: 'PRIVATE' }
 ];
+
+const cleaningRuleVisible = ref(false);
+const ruleCreateLoading = ref(false);
+const cleaningPreviewLoading = ref(false);
+const selectedRuleSetId = ref<number | null>(null);
+const editingRuleSetId = ref<number | null>(null);
+const cleaningPreviewText = ref('企业制度正文\n第 1 页 / 共 3 页\n第一条 公司制度说明。\n第一条 公司制度说明。');
+const cleaningPreviewResult = ref<Api.KnowledgeBase.CleaningPreviewResult | null>(null);
+const rulePatternText = ref('^第\\s*\\d+\\s*页\\s*/\\s*共\\s*\\d+\\s*页$');
+const ruleCreateModel = reactive<Api.KnowledgeBase.CleaningRuleSetCreateForm>({
+  name: '',
+  description: '',
+  knowledgeScope: 'PUBLIC',
+  departmentId: null,
+  normalizeLineBreaks: true,
+  normalizeUnicodeSpaces: true,
+  normalizeWhitespace: true,
+  trimLines: true,
+  collapseBlankLines: true,
+  removeDuplicateLines: true,
+  minDuplicateLineLength: 8,
+  dropLinePatterns: []
+});
 
 const filteredTasks = computed(() => {
   return tasks.value.filter(item => {
@@ -148,6 +198,7 @@ const filteredTasks = computed(() => {
 
     const departmentId = item.departmentId || item.orgTag;
     if (filterModel.departmentId && departmentId !== filterModel.departmentId) return false;
+    if (filterModel.categoryId && item.categoryId !== filterModel.categoryId) return false;
 
     return true;
   });
@@ -156,7 +207,9 @@ const filteredTasks = computed(() => {
 const totalCount = computed(() => tasks.value.length);
 const completedCount = computed(() => tasks.value.filter(item => item.status === UploadStatus.Completed).length);
 const departmentCount = computed(() => tasks.value.filter(item => normalizeScope(item) === 'DEPARTMENT').length);
+const categoryCount = computed(() => new Set(tasks.value.map(item => item.categoryId).filter(Boolean)).size);
 const processingCount = computed(() => tasks.value.filter(item => item.status !== UploadStatus.Completed).length);
+const cleanedCount = computed(() => tasks.value.filter(item => item.cleaningStatus === 'CLEANED').length);
 
 const indexedCount = computed(() =>
   tasks.value.filter(item => item.indexStatus === IndexStatus.Indexed || item.indexStatus === undefined).length
@@ -170,7 +223,7 @@ const indexPendingCount = computed(() =>
 let indexPollTimer: ReturnType<typeof setInterval> | null = null;
 
 onMounted(async () => {
-  await Promise.all([getList(), store.refreshUploadPreflight()]);
+  await Promise.all([getList(), store.refreshUploadPreflight(), store.refreshCategories()]);
   startIndexPolling();
 });
 
@@ -277,6 +330,127 @@ async function handleUpload() {
 }
 // #endregion
 
+function resetRuleCreateModel() {
+  editingRuleSetId.value = null;
+  ruleCreateModel.name = '';
+  ruleCreateModel.description = '';
+  ruleCreateModel.knowledgeScope = authStore.isSuperAdmin || authStore.userInfo.role === 'KNOWLEDGE_ADMIN' ? 'PUBLIC' : 'DEPARTMENT';
+  ruleCreateModel.departmentId = null;
+  ruleCreateModel.normalizeLineBreaks = true;
+  ruleCreateModel.normalizeUnicodeSpaces = true;
+  ruleCreateModel.normalizeWhitespace = true;
+  ruleCreateModel.trimLines = true;
+  ruleCreateModel.collapseBlankLines = true;
+  ruleCreateModel.removeDuplicateLines = true;
+  ruleCreateModel.minDuplicateLineLength = 8;
+  ruleCreateModel.dropLinePatterns = [];
+  rulePatternText.value = '^第\\s*\\d+\\s*页\\s*/\\s*共\\s*\\d+\\s*页$';
+}
+
+function fillRuleForm(ruleSet: Api.KnowledgeBase.CleaningRuleSet) {
+  editingRuleSetId.value = ruleSet.id;
+  selectedRuleSetId.value = ruleSet.id;
+  ruleCreateModel.name = ruleSet.name;
+  ruleCreateModel.description = ruleSet.description || '';
+  ruleCreateModel.knowledgeScope = ruleSet.knowledgeScope;
+  ruleCreateModel.departmentId = ruleSet.departmentId || null;
+  ruleCreateModel.normalizeLineBreaks = ruleSet.normalizeLineBreaks;
+  ruleCreateModel.normalizeUnicodeSpaces = ruleSet.normalizeUnicodeSpaces;
+  ruleCreateModel.normalizeWhitespace = ruleSet.normalizeWhitespace;
+  ruleCreateModel.trimLines = ruleSet.trimLines;
+  ruleCreateModel.collapseBlankLines = ruleSet.collapseBlankLines;
+  ruleCreateModel.removeDuplicateLines = ruleSet.removeDuplicateLines;
+  ruleCreateModel.minDuplicateLineLength = ruleSet.minDuplicateLineLength;
+  ruleCreateModel.dropLinePatterns = [...ruleSet.dropLinePatterns];
+  rulePatternText.value = ruleSet.dropLinePatterns.join('\n');
+}
+
+async function openCleaningRuleManager() {
+  cleaningRuleVisible.value = true;
+  resetRuleCreateModel();
+  cleaningPreviewResult.value = null;
+  await store.refreshCleaningRuleSets();
+  selectedRuleSetId.value = cleaningRuleSets.value[0]?.id ?? null;
+}
+
+function parseRulePatterns() {
+  return rulePatternText.value
+    .split('\n')
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+async function handleCreateRuleSet() {
+  const name = ruleCreateModel.name.trim();
+  if (!name) {
+    window.$message?.warning('请输入规则集名称');
+    return;
+  }
+  if (ruleCreateModel.knowledgeScope === 'DEPARTMENT' && !ruleCreateModel.departmentId) {
+    window.$message?.warning('请选择所属部门');
+    return;
+  }
+
+  ruleCreateLoading.value = true;
+  const payload = {
+    ...ruleCreateModel,
+    name,
+    description: ruleCreateModel.description?.trim() || '',
+    departmentId: ruleCreateModel.knowledgeScope === 'DEPARTMENT' ? ruleCreateModel.departmentId : null,
+    dropLinePatterns: parseRulePatterns()
+  };
+  const ok = editingRuleSetId.value
+    ? await store.updateCleaningRuleSet(editingRuleSetId.value, payload)
+    : await store.createCleaningRuleSet(payload);
+  ruleCreateLoading.value = false;
+
+  if (ok) {
+    const wasEditing = Boolean(editingRuleSetId.value);
+    const targetRuleSetId = editingRuleSetId.value;
+    const saved = wasEditing
+      ? cleaningRuleSets.value.find(item => item.id === targetRuleSetId)
+      : cleaningRuleSets.value.find(item => item.name === name);
+    selectedRuleSetId.value = saved?.id ?? cleaningRuleSets.value[0]?.id ?? null;
+    resetRuleCreateModel();
+    window.$message?.success(wasEditing ? '清洗规则集已更新' : '清洗规则集已创建');
+  }
+}
+
+async function handleDisableRuleSet(ruleSet: Api.KnowledgeBase.CleaningRuleSet) {
+  const ok = await store.disableCleaningRuleSet(ruleSet.id);
+  if (ok) {
+    if (selectedRuleSetId.value === ruleSet.id) selectedRuleSetId.value = cleaningRuleSets.value[0]?.id ?? null;
+    if (editingRuleSetId.value === ruleSet.id) resetRuleCreateModel();
+    window.$message?.success('清洗规则集已停用');
+  }
+}
+
+async function handlePreviewCleaning() {
+  if (!cleaningPreviewText.value.trim()) {
+    window.$message?.warning('请输入预览文本');
+    return;
+  }
+
+  cleaningPreviewLoading.value = true;
+  cleaningPreviewResult.value = await store.previewCleaning({
+    rawText: cleaningPreviewText.value,
+    ruleSetId: selectedRuleSetId.value,
+    ruleConfig: selectedRuleSetId.value
+      ? null
+      : {
+          normalizeLineBreaks: ruleCreateModel.normalizeLineBreaks,
+          normalizeUnicodeSpaces: ruleCreateModel.normalizeUnicodeSpaces,
+          normalizeWhitespace: ruleCreateModel.normalizeWhitespace,
+          trimLines: ruleCreateModel.trimLines,
+          collapseBlankLines: ruleCreateModel.collapseBlankLines,
+          removeDuplicateLines: ruleCreateModel.removeDuplicateLines,
+          minDuplicateLineLength: ruleCreateModel.minDuplicateLineLength,
+          dropLinePatterns: parseRulePatterns()
+        }
+  });
+  cleaningPreviewLoading.value = false;
+}
+
 // #region 检索知识库
 const searchVisible = ref(false);
 function handleSearch() {
@@ -288,6 +462,7 @@ function resetFilters() {
   filterModel.keyword = '';
   filterModel.knowledgeScope = null;
   filterModel.departmentId = null;
+  filterModel.categoryId = null;
 }
 
 function normalizeScope(row: Api.KnowledgeBase.UploadTask) {
@@ -299,6 +474,11 @@ function renderKnowledgeScope(row: Api.KnowledgeBase.UploadTask) {
   if (scope === 'PUBLIC') return <NTag type="success">公共知识</NTag>;
   if (scope === 'PRIVATE') return <NTag type="warning">私人知识</NTag>;
   return <NTag type="info">部门知识</NTag>;
+}
+
+function renderCategory(row: Api.KnowledgeBase.UploadTask) {
+  if (!row.categoryName) return <NTag bordered={false}>未分类</NTag>;
+  return <NTag type="primary">{row.categoryName}</NTag>;
 }
 
 function renderVisibility(row: Api.KnowledgeBase.UploadTask) {
@@ -350,6 +530,64 @@ function renderIndexStatus(row: Api.KnowledgeBase.UploadTask) {
   return <NTag type="success">可检索</NTag>;
 }
 
+function cleaningRemovedRatio(row: Api.KnowledgeBase.UploadTask) {
+  const originalChars = row.originalChars || 0;
+  if (!originalChars) return 0;
+  return Math.round(((row.removedChars || 0) / originalChars) * 100);
+}
+
+function cleaningStatusText(status?: Api.KnowledgeBase.UploadTask['cleaningStatus']) {
+  if (status === 'CLEANING') return '清洗中';
+  if (status === 'FAILED') return '清洗失败';
+  if (status === 'CLEANED') return '已清洗';
+  return '待清洗';
+}
+
+function renderCleaningStatus(row: Api.KnowledgeBase.UploadTask) {
+  if (row.status !== UploadStatus.Completed) {
+    return <NTag bordered={false}>-</NTag>;
+  }
+  const status = row.cleaningStatus || 'PENDING';
+
+  if (status === 'CLEANING') {
+    return <NTag type="info">清洗中</NTag>;
+  }
+  if (status === 'FAILED') {
+    return <NTag type="error">清洗失败</NTag>;
+  }
+  if (status === 'CLEANED') {
+    return (
+      <NButton text type="success" onClick={() => openCleaningDetail(row)}>
+        已清洗 {cleaningRemovedRatio(row)}%
+      </NButton>
+    );
+  }
+  return <NTag type="warning">待清洗</NTag>;
+}
+
+function availableCleaningRuleOptions(row: Api.KnowledgeBase.UploadTask | null) {
+  if (!row) return [];
+  const scope = normalizeScope(row);
+  const departmentId = row.departmentId || row.orgTag;
+  return cleaningRuleSets.value
+    .filter(item => {
+      if (scope === 'PUBLIC') return item.knowledgeScope === 'PUBLIC';
+      if (scope === 'DEPARTMENT') {
+        return item.knowledgeScope === 'PUBLIC' || item.departmentId === departmentId;
+      }
+      return false;
+    })
+    .map(item => ({
+      label: `${item.name}${item.knowledgeScope === 'PUBLIC' ? ' · 公共' : ' · 部门'}`,
+      value: item.id
+    }));
+}
+
+function cleaningRuleName(ruleSetId?: number | null) {
+  if (!ruleSetId) return '默认清洗规则';
+  return cleaningRuleSets.value.find(item => item.id === ruleSetId)?.name || `规则集 #${ruleSetId}`;
+}
+
 function renderReindexButton(row: Api.KnowledgeBase.UploadTask) {
   if (row.status !== UploadStatus.Completed) return null;
   if (!canManageDocument(row)) return null;
@@ -388,6 +626,40 @@ async function handleReindex(fileMd5: string) {
   if (!error) {
     window.$message?.success('索引任务已重新提交');
     await getList();
+  }
+}
+
+async function handleReclean(row: Api.KnowledgeBase.UploadTask) {
+  if (!canManageDocument(row)) {
+    window.$message?.warning('当前账号暂无管理此文档的权限');
+    return;
+  }
+  recleaning.value = true;
+  try {
+    const { error } = await request({
+      url: `/documents/${row.fileMd5}/reclean`,
+      method: 'POST',
+      data: { cleaningRuleSetId: recleanRuleSetId.value }
+    });
+
+    if (!error) {
+      Object.assign(row, {
+        cleaningRuleSetId: recleanRuleSetId.value,
+        cleaningStatus: 'PENDING',
+        originalChars: 0,
+        cleanedChars: 0,
+        removedChars: 0,
+        duplicateLinesRemoved: 0,
+        indexStatus: IndexStatus.Pending,
+        indexError: null
+      });
+      window.$message?.success('清洗与索引任务已重新提交');
+      await getList();
+      const latest = tasks.value.find(task => task.fileMd5 === row.fileMd5);
+      if (latest) cleaningDetailTask.value = latest;
+    }
+  } finally {
+    recleaning.value = false;
   }
 }
 
@@ -484,8 +756,8 @@ async function onBeforeUpload(
           <icon-solar:lock-keyhole-bold-duotone />
         </span>
         <div>
-          <p>部门知识</p>
-          <strong>{{ departmentCount }}</strong>
+          <p>知识分类</p>
+          <strong>{{ categoryCount }}</strong>
         </div>
       </div>
       <div class="overview-card">
@@ -493,8 +765,8 @@ async function onBeforeUpload(
           <icon-solar:refresh-circle-bold-duotone />
         </span>
         <div>
-          <p>索引中</p>
-          <strong>{{ indexPendingCount }}</strong>
+          <p>已清洗</p>
+          <strong>{{ cleanedCount }}</strong>
         </div>
       </div>
     </div>
@@ -524,6 +796,15 @@ async function onBeforeUpload(
             value-field="tagId"
             clearable
             class="w-220px!"
+          />
+        </NFormItem>
+        <NFormItem label="知识分类">
+          <NSelect
+            v-model:value="filterModel.categoryId"
+            :options="categories.map(item => ({ label: item.name, value: item.id }))"
+            placeholder="全部分类"
+            clearable
+            class="w-180px!"
           />
         </NFormItem>
         <NFormItem>
@@ -566,6 +847,9 @@ async function onBeforeUpload(
               </div>
             </NPopover>
             <NTag :type="accessModeTag.type" :bordered="false">{{ accessModeTag.label }}</NTag>
+            <NButton size="small" ghost type="info" @click="openCleaningRuleManager">
+              清洗规则
+            </NButton>
             <NButton size="small" ghost type="primary" @click="handleSearch">
               <template #icon>
                 <icon-ic-round-search class="text-icon" />
@@ -581,7 +865,7 @@ async function onBeforeUpload(
         :data="filteredTasks"
         size="small"
         :flex-height="!appStore.isMobile"
-        :scroll-x="962"
+        :scroll-x="1092"
         :loading="loading"
         remote
         :row-key="row => row.fileMd5"
@@ -591,6 +875,184 @@ async function onBeforeUpload(
     </NCard>
     <UploadDialog v-model:visible="uploadVisible" />
     <SearchDialog v-model:visible="searchVisible" />
+
+    <NModal v-model:show="cleaningRuleVisible" preset="card" title="清洗规则集" class="paper-modal max-w-980px w-[94%]">
+      <div class="rule-manager">
+        <section class="rule-panel">
+          <div class="rule-panel-title">
+            <strong>已有规则集</strong>
+            <NButton size="tiny" ghost :loading="cleaningRuleSetLoading" @click="store.refreshCleaningRuleSets">
+              刷新
+            </NButton>
+          </div>
+          <NSelect
+            v-model:value="selectedRuleSetId"
+            :options="cleaningRuleSets.map(item => ({ label: `${item.name} · ${item.knowledgeScope === 'PUBLIC' ? '公共' : item.departmentId || '部门'}`, value: item.id }))"
+            placeholder="选择规则集"
+            clearable
+            :loading="cleaningRuleSetLoading"
+          />
+          <div class="rule-list">
+            <div v-for="item in cleaningRuleSets" :key="item.id" class="rule-list-item">
+              <div>
+                <strong>{{ item.name }}</strong>
+                <span>{{ item.description || '未填写说明' }}</span>
+              </div>
+              <div class="rule-list-actions">
+                <NTag :type="item.knowledgeScope === 'PUBLIC' ? 'success' : 'info'" size="small">
+                  {{ item.knowledgeScope === 'PUBLIC' ? '公共' : item.departmentId || '部门' }}
+                </NTag>
+                <NButton size="tiny" text type="primary" @click="fillRuleForm(item)">编辑</NButton>
+                <NPopconfirm @positive-click="handleDisableRuleSet(item)">
+                  <template #trigger>
+                    <NButton size="tiny" text type="error">停用</NButton>
+                  </template>
+                  停用后上传和重清洗时将不再可选，确认继续吗？
+                </NPopconfirm>
+              </div>
+            </div>
+            <div v-if="!cleaningRuleSets.length" class="empty-line">暂无规则集</div>
+          </div>
+        </section>
+
+        <section class="rule-panel">
+          <div class="rule-panel-title">
+            <strong>{{ editingRuleSetId ? '编辑规则集' : '新建规则集' }}</strong>
+            <NButton v-if="editingRuleSetId" size="tiny" ghost @click="resetRuleCreateModel">取消编辑</NButton>
+          </div>
+          <div class="rule-form-grid">
+            <NInput v-model:value="ruleCreateModel.name" placeholder="规则集名称" />
+            <NSelect
+              v-model:value="ruleCreateModel.knowledgeScope"
+              :options="knowledgeScopeOptions.filter(item => item.value !== 'PRIVATE')"
+              placeholder="适用范围"
+            />
+            <OrgTagCascader
+              v-if="ruleCreateModel.knowledgeScope === 'DEPARTMENT' && authStore.isSuperAdmin"
+              v-model:value="ruleCreateModel.departmentId"
+              clearable
+            />
+            <TheSelect
+              v-else-if="ruleCreateModel.knowledgeScope === 'DEPARTMENT'"
+              v-model:value="ruleCreateModel.departmentId"
+              url="/users/org-tags"
+              key-field="orgTagDetails"
+              label-field="name"
+              value-field="tagId"
+              clearable
+            />
+          </div>
+          <NInput v-model:value="ruleCreateModel.description" placeholder="说明" />
+          <div class="rule-switches">
+            <NCheckbox v-model:checked="ruleCreateModel.normalizeWhitespace">压缩空白</NCheckbox>
+            <NCheckbox v-model:checked="ruleCreateModel.collapseBlankLines">折叠空行</NCheckbox>
+            <NCheckbox v-model:checked="ruleCreateModel.removeDuplicateLines">删除重复长行</NCheckbox>
+            <NCheckbox v-model:checked="ruleCreateModel.normalizeUnicodeSpaces">归一特殊空格</NCheckbox>
+          </div>
+          <div class="rule-inline">
+            <span>重复行最小长度</span>
+            <NInputNumber v-model:value="ruleCreateModel.minDuplicateLineLength" :min="1" :max="200" class="w-120px" />
+          </div>
+          <NInput
+            v-model:value="rulePatternText"
+            type="textarea"
+            placeholder="每行一条要删除整行的正则，例如 ^第\\s*\\d+\\s*页\\s*/\\s*共\\s*\\d+\\s*页$"
+            :autosize="{ minRows: 3, maxRows: 5 }"
+          />
+          <div class="detail-actions">
+            <NButton type="primary" ghost :loading="ruleCreateLoading" @click="handleCreateRuleSet">
+              {{ editingRuleSetId ? '保存修改' : '保存规则集' }}
+            </NButton>
+          </div>
+        </section>
+
+        <section class="rule-panel rule-preview">
+          <div class="rule-panel-title">
+            <strong>清洗预览</strong>
+            <NButton size="small" type="primary" ghost :loading="cleaningPreviewLoading" @click="handlePreviewCleaning">
+              预览
+            </NButton>
+          </div>
+          <div class="preview-grid">
+            <NInput v-model:value="cleaningPreviewText" type="textarea" :autosize="{ minRows: 8, maxRows: 12 }" />
+            <div class="preview-output">
+              <div class="preview-stats">
+                <NTag size="small">原始 {{ cleaningPreviewResult?.originalChars || 0 }}</NTag>
+                <NTag size="small" type="success">清洗后 {{ cleaningPreviewResult?.cleanedChars || 0 }}</NTag>
+                <NTag size="small" type="warning">删除 {{ cleaningPreviewResult?.removedChars || 0 }}</NTag>
+                <NTag size="small" type="info">重复行 {{ cleaningPreviewResult?.duplicateLinesRemoved || 0 }}</NTag>
+              </div>
+              <pre>{{ cleaningPreviewResult?.cleanedText || '点击预览后显示清洗结果' }}</pre>
+            </div>
+          </div>
+        </section>
+      </div>
+    </NModal>
+
+    <NModal v-model:show="cleaningDetailVisible" preset="card" title="清洗详情" class="paper-modal max-w-620px w-[92%]">
+      <div v-if="cleaningDetailTask" class="cleaning-detail">
+        <div class="detail-file">
+          <strong>{{ cleaningDetailTask.fileName }}</strong>
+          <NTag :type="cleaningDetailTask.cleaningStatus === 'CLEANED' ? 'success' : 'warning'" :bordered="false">
+            {{ cleaningStatusText(cleaningDetailTask.cleaningStatus) }}
+          </NTag>
+        </div>
+        <div class="detail-grid">
+          <div>
+            <span>原始字符</span>
+            <strong>{{ cleaningDetailTask.originalChars || 0 }}</strong>
+          </div>
+          <div>
+            <span>清洗后字符</span>
+            <strong>{{ cleaningDetailTask.cleanedChars || 0 }}</strong>
+          </div>
+          <div>
+            <span>删除字符</span>
+            <strong>{{ cleaningDetailTask.removedChars || 0 }}</strong>
+          </div>
+          <div>
+            <span>重复行</span>
+            <strong>{{ cleaningDetailTask.duplicateLinesRemoved || 0 }}</strong>
+          </div>
+        </div>
+        <div class="detail-ratio">
+          <span>清洗压缩比例</span>
+          <NProgress
+            type="line"
+            :percentage="cleaningRemovedRatio(cleaningDetailTask)"
+            :show-indicator="true"
+            status="success"
+          />
+        </div>
+        <div class="detail-rule">
+          <span>当前规则</span>
+          <strong>{{ cleaningRuleName(cleaningDetailTask.cleaningRuleSetId) }}</strong>
+        </div>
+        <div v-if="canManageDocument(cleaningDetailTask)" class="detail-actions">
+          <NSelect
+            v-model:value="recleanRuleSetId"
+            :options="availableCleaningRuleOptions(cleaningDetailTask)"
+            :loading="cleaningRuleSetLoading"
+            clearable
+            placeholder="默认清洗规则"
+            class="min-w-240px"
+          />
+          <NPopconfirm @positive-click="handleReclean(cleaningDetailTask)">
+            <template #trigger>
+              <NButton
+                type="warning"
+                ghost
+                :loading="recleaning"
+                :disabled="cleaningDetailTask.status !== UploadStatus.Completed"
+              >
+                重新清洗并索引
+              </NButton>
+            </template>
+            重新清洗会使用当前选择的清洗规则，覆盖清洗统计并重新生成检索索引，确认继续吗？
+          </NPopconfirm>
+        </div>
+      </div>
+    </NModal>
 
     <!-- 文件预览弹窗 -->
     <NModal v-model:show="previewVisible" preset="card" title="文件预览" class="paper-modal max-w-1000px w-[80%]">
@@ -706,6 +1168,199 @@ html.dark .service-command {
   background: rgb(255 255 255 / 0.08);
 }
 
+.rule-manager {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.8fr) minmax(320px, 1.1fr);
+  gap: 16px;
+}
+
+.rule-panel {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.rule-preview {
+  grid-column: 1 / -1;
+}
+
+.rule-panel-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rule-list {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.rule-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid rgb(15 23 42 / 0.08);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.rule-list-item > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.rule-list-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.rule-list-item span,
+.empty-line {
+  color: rgb(var(--base-text-color) / 0.58);
+  font-size: 12px;
+}
+
+.rule-form-grid,
+.preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.rule-switches {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+
+.rule-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: rgb(var(--base-text-color) / 0.72);
+  font-size: 13px;
+}
+
+.preview-output {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 8px;
+  min-height: 210px;
+  border: 1px solid rgb(15 23 42 / 0.08);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.preview-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.preview-output pre {
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: rgb(var(--base-text-color) / 0.86);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+html.dark .rule-list-item,
+html.dark .preview-output {
+  border-color: rgb(255 255 255 / 0.08);
+}
+
+.cleaning-detail {
+  display: grid;
+  gap: 16px;
+}
+
+.detail-file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.detail-file strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.detail-grid > div {
+  border: 1px solid rgb(15 23 42 / 0.08);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.detail-grid span,
+.detail-ratio span,
+.detail-rule span {
+  display: block;
+  color: rgb(var(--base-text-color) / 0.58);
+  font-size: 12px;
+}
+
+.detail-grid strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.detail-ratio {
+  display: grid;
+  gap: 8px;
+}
+
+.detail-rule {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgb(15 23 42 / 0.08);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: flex-end;
+  border-top: 1px solid rgb(15 23 42 / 0.08);
+  padding-top: 14px;
+}
+
+html.dark .detail-grid > div,
+html.dark .detail-rule {
+  border-color: rgb(255 255 255 / 0.08);
+}
+
+html.dark .detail-actions {
+  border-top-color: rgb(255 255 255 / 0.08);
+}
+
 @media (width < 1024px) {
   .knowledge-overview {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -714,6 +1369,16 @@ html.dark .service-command {
 
 @media (width < 640px) {
   .knowledge-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rule-manager,
+  .rule-form-grid,
+  .preview-grid {
     grid-template-columns: 1fr;
   }
 }

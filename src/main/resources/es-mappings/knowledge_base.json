@@ -40,6 +40,12 @@
       "departmentId": {
         "type": "keyword"
       },
+      "categoryId": {
+        "type": "long"
+      },
+      "categoryName": {
+        "type": "keyword"
+      },
       "isPublic": {
         "type": "boolean"
       }

@@ -64,8 +64,10 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
                 path.matches(".*/upload/status.*") || 
                 path.matches(".*/documents/uploads.*") ||
                 path.matches(".*/documents/accessible.*") ||
+                path.matches(".*/knowledge-categories.*") ||
+                path.matches(".*/data-cleaning.*") ||
                 path.matches(".*/search/hybrid.*") ||
-                (path.matches(".*/documents/[a-fA-F0-9]{32}(/reindex)?.*")
+                (path.matches(".*/documents/[a-fA-F0-9]{32}(/(reindex|reclean))?.*")
                         && ("DELETE".equals(request.getMethod()) || "POST".equals(request.getMethod())))) {
                 
                 String operation = "未知操作";
@@ -81,12 +83,18 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
                     operation = "获取用户文档";
                 } else if (path.contains("/accessible")) {
                     operation = "获取可访问文档";
+                } else if (path.contains("/knowledge-categories")) {
+                    operation = "管理知识分类";
+                } else if (path.contains("/data-cleaning")) {
+                    operation = "数据清洗";
                 } else if (path.contains("/search/hybrid")) {
                     operation = "混合检索";
                 } else if ("DELETE".equals(request.getMethod()) && path.matches(".*/documents/[a-fA-F0-9]{32}.*")) {
                     operation = "删除文档";
                 } else if ("POST".equals(request.getMethod()) && path.contains("/reindex")) {
                     operation = "重新索引";
+                } else if ("POST".equals(request.getMethod()) && path.contains("/reclean")) {
+                    operation = "重新清洗";
                 }
                 
                 logger.info("处理{}请求: {}", operation, path);

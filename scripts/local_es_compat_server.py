@@ -117,6 +117,8 @@ class Handler(BaseHTTPRequestHandler):
                             "vector": {"type": "dense_vector", "dims": 1024},
                             "knowledgeScope": {"type": "keyword"},
                             "departmentId": {"type": "keyword"},
+                            "categoryId": {"type": "long"},
+                            "categoryName": {"type": "keyword"},
                         }
                     }
                 }

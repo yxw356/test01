@@ -6,6 +6,7 @@ import com.yuki.enterprise_private_rag_qa.client.EmbeddingClient;
 import com.yuki.enterprise_private_rag_qa.model.DocumentVector;
 import com.yuki.enterprise_private_rag_qa.model.FileUpload;
 import com.yuki.enterprise_private_rag_qa.repository.DocumentVectorRepository;
+import com.yuki.enterprise_private_rag_qa.repository.FileUploadRepository;
 import org.apache.tika.exception.TikaException;
 import org.apache.tika.metadata.Metadata;
 import org.apache.tika.parser.AutoDetectParser;
@@ -36,6 +37,15 @@ public class ParseService {
 
     @Autowired
     private DocumentVectorRepository documentVectorRepository;
+
+    @Autowired
+    private FileUploadRepository fileUploadRepository;
+
+    @Autowired
+    private DataCleaningService dataCleaningService;
+
+    @Autowired(required = false)
+    private CleaningRuleSetService cleaningRuleSetService;
 
     @Autowired(required = false)
     private EmbeddingClient embeddingClient;
@@ -80,23 +90,44 @@ public class ParseService {
                              String userId, String orgTag, boolean isPublic, String fileName,
                              String knowledgeScope, String departmentId)
             throws IOException, TikaException {
-        logger.info("开始解析文件，fileMd5: {}, fileName: {}, userId: {}, orgTag: {}, isPublic: {}, scope: {}, departmentId: {}",
-                fileMd5, fileName, userId, orgTag, isPublic, knowledgeScope, departmentId);
+        parseAndSave(fileMd5, fileStream, userId, orgTag, isPublic, fileName,
+                knowledgeScope, departmentId, null, null);
+    }
+
+    public void parseAndSave(String fileMd5, InputStream fileStream,
+                             String userId, String orgTag, boolean isPublic, String fileName,
+                             String knowledgeScope, String departmentId, Long categoryId, String categoryName)
+            throws IOException, TikaException {
+        parseAndSave(fileMd5, fileStream, userId, orgTag, isPublic, fileName,
+                knowledgeScope, departmentId, categoryId, categoryName, null);
+    }
+
+    public void parseAndSave(String fileMd5, InputStream fileStream,
+                             String userId, String orgTag, boolean isPublic, String fileName,
+                             String knowledgeScope, String departmentId, Long categoryId, String categoryName,
+                             Long cleaningRuleSetId)
+            throws IOException, TikaException {
+        logger.info("开始解析文件，fileMd5: {}, fileName: {}, userId: {}, orgTag: {}, isPublic: {}, scope: {}, departmentId: {}, categoryId: {}, cleaningRuleSetId: {}",
+                fileMd5, fileName, userId, orgTag, isPublic, knowledgeScope, departmentId, categoryId, cleaningRuleSetId);
 
         checkMemoryThreshold();
+        markCleaningInProgress(fileMd5);
         documentVectorRepository.deleteByFileMd5(fileMd5);
         logger.info("已清理旧文档分块，fileMd5: {}", fileMd5);
+        DataCleaningService.CleaningRuleConfig cleaningRuleConfig = resolveCleaningRuleConfig(cleaningRuleSetId, userId);
 
         if (tabularParseService.isTabular(fileName)) {
             String tableText = tabularParseService.extractText(fileStream, fileName);
-            parsePlainTextAndSave(fileMd5, tableText, userId, orgTag, isPublic, knowledgeScope, departmentId);
-            logger.info("表格文件解析完成，fileMd5: {}", fileMd5);
+            parsePlainTextAndSaveWithConfig(fileMd5, tableText, userId, orgTag, isPublic,
+                    knowledgeScope, departmentId, categoryId, categoryName, cleaningRuleConfig);
+            logger.info("表格文件解析和清洗完成，fileMd5: {}", fileMd5);
             return;
         }
 
         try (BufferedInputStream bufferedStream = new BufferedInputStream(fileStream, bufferSize)) {
             StreamingContentHandler handler = new StreamingContentHandler(
-                    fileMd5, userId, orgTag, isPublic, knowledgeScope, departmentId);
+                    fileMd5, userId, orgTag, isPublic, knowledgeScope, departmentId,
+                    categoryId, categoryName, cleaningRuleConfig);
             Metadata metadata = new Metadata();
             ParseContext context = new ParseContext();
             AutoDetectParser parser = new AutoDetectParser();
@@ -105,7 +136,11 @@ public class ParseService {
             logger.info("文件流式解析和入库完成，fileMd5: {}", fileMd5);
         } catch (SAXException e) {
             logger.error("文档解析失败，fileMd5: {}", fileMd5, e);
+            markCleaningFailed(fileMd5);
             throw new RuntimeException("文档解析失败", e);
+        } catch (IOException | TikaException e) {
+            markCleaningFailed(fileMd5);
+            throw e;
         }
     }
 
@@ -125,8 +160,38 @@ public class ParseService {
 
     public void parsePlainTextAndSave(String fileMd5, String text, String userId, String orgTag, boolean isPublic,
                                       String knowledgeScope, String departmentId) {
+        parsePlainTextAndSave(fileMd5, text, userId, orgTag, isPublic, knowledgeScope, departmentId, null, null);
+    }
+
+    public void parsePlainTextAndSave(String fileMd5, String text, String userId, String orgTag, boolean isPublic,
+                                      String knowledgeScope, String departmentId,
+                                      Long categoryId, String categoryName) {
+        parsePlainTextAndSave(fileMd5, text, userId, orgTag, isPublic,
+                knowledgeScope, departmentId, categoryId, categoryName, null);
+    }
+
+    public void parsePlainTextAndSave(String fileMd5, String text, String userId, String orgTag, boolean isPublic,
+                                      String knowledgeScope, String departmentId,
+                                      Long categoryId, String categoryName, Long cleaningRuleSetId) {
+        parsePlainTextAndSaveWithConfig(fileMd5, text, userId, orgTag, isPublic,
+                knowledgeScope, departmentId, categoryId, categoryName,
+                resolveCleaningRuleConfig(cleaningRuleSetId, userId));
+    }
+
+    private void parsePlainTextAndSaveWithConfig(String fileMd5, String text, String userId, String orgTag, boolean isPublic,
+                                                 String knowledgeScope, String departmentId,
+                                                 Long categoryId, String categoryName,
+                                                 DataCleaningService.CleaningRuleConfig cleaningRuleConfig) {
         if (text == null || text.isBlank()) {
             logger.warn("纯文本为空，跳过入库，fileMd5: {}", fileMd5);
+            return;
+        }
+        markCleaningInProgress(fileMd5);
+        DataCleaningService.CleaningResult cleaningResult = cleanText(text, cleaningRuleConfig);
+        text = cleaningResult.cleanedText();
+        if (text.isBlank()) {
+            recordCleaningResult(fileMd5, cleaningResult);
+            logger.warn("清洗后文本为空，跳过入库，fileMd5: {}", fileMd5);
             return;
         }
         int savedParentCount = 0;
@@ -141,9 +206,10 @@ public class ParseService {
             List<String> childChunks = splitTextIntoChunksWithSemantics(parentChunk, effectiveChildMaxChunkSize());
             savedChunkCount = saveChildChunks(
                     fileMd5, parentId, parentChunk, childChunks, userId, orgTag, isPublic,
-                    knowledgeScope, departmentId, savedChunkCount
+                    knowledgeScope, departmentId, categoryId, categoryName, savedChunkCount
             );
         }
+        recordCleaningResult(fileMd5, cleaningResult);
         logger.info("纯文本分块入库完成，fileMd5: {}, parentCount={}, chunkCount={}",
                 fileMd5, savedParentCount, savedChunkCount);
     }
@@ -171,6 +237,64 @@ public class ParseService {
         }
     }
 
+    private DataCleaningService.CleaningResult cleanText(String text) {
+        return cleanText(text, null);
+    }
+
+    private DataCleaningService.CleaningResult cleanText(String text, DataCleaningService.CleaningRuleConfig cleaningRuleConfig) {
+        if (dataCleaningService == null) {
+            int length = text == null ? 0 : text.length();
+            return new DataCleaningService.CleaningResult(text == null ? "" : text, length, length, 0, 0);
+        }
+        if (cleaningRuleConfig != null) {
+            return dataCleaningService.clean(text, cleaningRuleConfig);
+        }
+        return dataCleaningService.clean(text);
+    }
+
+    private DataCleaningService.CleaningRuleConfig resolveCleaningRuleConfig(Long cleaningRuleSetId, String userId) {
+        if (cleaningRuleSetId == null) {
+            return null;
+        }
+        if (cleaningRuleSetService == null) {
+            throw new IllegalStateException("清洗规则集服务不可用，无法应用规则集 " + cleaningRuleSetId);
+        }
+        return cleaningRuleSetService.resolveRuleConfig(cleaningRuleSetId, userId);
+    }
+
+    private void markCleaningInProgress(String fileMd5) {
+        updateCleaningMetadata(fileMd5, upload -> upload.setCleaningStatus(FileUpload.CleaningStatus.CLEANING));
+    }
+
+    private void markCleaningFailed(String fileMd5) {
+        updateCleaningMetadata(fileMd5, upload -> upload.setCleaningStatus(FileUpload.CleaningStatus.FAILED));
+    }
+
+    private void recordCleaningResult(String fileMd5, DataCleaningService.CleaningResult result) {
+        updateCleaningMetadata(fileMd5, upload -> {
+            upload.setCleaningStatus(FileUpload.CleaningStatus.CLEANED);
+            upload.setOriginalChars(result.originalChars());
+            upload.setCleanedChars(result.cleanedChars());
+            upload.setRemovedChars(result.removedChars());
+            upload.setDuplicateLinesRemoved(result.duplicateLinesRemoved());
+        });
+    }
+
+    private void updateCleaningMetadata(String fileMd5, java.util.function.Consumer<FileUpload> updater) {
+        if (fileUploadRepository == null || fileMd5 == null || fileMd5.isBlank()) {
+            return;
+        }
+        try {
+            fileUploadRepository.findByFileMd5(fileMd5).ifPresent(upload -> {
+                upload.setStatus(1);
+                updater.accept(upload);
+                fileUploadRepository.save(upload);
+            });
+        } catch (Exception e) {
+            logger.warn("更新文件清洗状态失败，fileMd5: {}, error: {}", fileMd5, e.getMessage());
+        }
+    }
+
     private class StreamingContentHandler extends BodyContentHandler {
         private final StringBuilder buffer = new StringBuilder();
         private final String fileMd5;
@@ -179,11 +303,20 @@ public class ParseService {
         private final boolean isPublic;
         private final String knowledgeScope;
         private final String departmentId;
+        private final Long categoryId;
+        private final String categoryName;
+        private final DataCleaningService.CleaningRuleConfig cleaningRuleConfig;
         private int savedChunkCount = 0;
         private int savedParentCount = 0;
+        private int originalChars = 0;
+        private int cleanedChars = 0;
+        private int removedChars = 0;
+        private int duplicateLinesRemoved = 0;
 
         public StreamingContentHandler(String fileMd5, String userId, String orgTag, boolean isPublic,
-                                       String knowledgeScope, String departmentId) {
+                                       String knowledgeScope, String departmentId,
+                                       Long categoryId, String categoryName,
+                                       DataCleaningService.CleaningRuleConfig cleaningRuleConfig) {
             super(-1);
             this.fileMd5 = fileMd5;
             this.userId = userId;
@@ -191,6 +324,9 @@ public class ParseService {
             this.isPublic = isPublic;
             this.knowledgeScope = knowledgeScope;
             this.departmentId = departmentId;
+            this.categoryId = categoryId;
+            this.categoryName = categoryName;
+            this.cleaningRuleConfig = cleaningRuleConfig;
         }
 
         @Override
@@ -199,11 +335,6 @@ public class ParseService {
             if (buffer.length() >= effectiveParentChunkSize() * 2) {
                 processBufferedText(false);
             }
-        }
-
-        @Override
-        public void endDocument() {
-            processBufferedText(true);
         }
 
         private void processBufferedText(boolean force) {
@@ -223,6 +354,13 @@ public class ParseService {
                 textToProcess = buffer.substring(0, cutIndex);
                 buffer.delete(0, cutIndex);
             }
+
+            DataCleaningService.CleaningResult cleaningResult = cleanText(textToProcess, cleaningRuleConfig);
+            originalChars += cleaningResult.originalChars();
+            cleanedChars += cleaningResult.cleanedChars();
+            removedChars += cleaningResult.removedChars();
+            duplicateLinesRemoved += cleaningResult.duplicateLinesRemoved();
+            textToProcess = cleaningResult.cleanedText();
 
             List<String> parentChunks = splitTextIntoParentChunks(textToProcess);
             for (String parentChunk : parentChunks) {
@@ -244,9 +382,23 @@ public class ParseService {
                         isPublic,
                         knowledgeScope,
                         departmentId,
+                        categoryId,
+                        categoryName,
                         savedChunkCount
                 );
             }
+        }
+
+        @Override
+        public void endDocument() {
+            processBufferedText(true);
+            recordCleaningResult(fileMd5, new DataCleaningService.CleaningResult(
+                    "",
+                    originalChars,
+                    cleanedChars,
+                    removedChars,
+                    duplicateLinesRemoved
+            ));
         }
     }
 
@@ -275,7 +427,8 @@ public class ParseService {
 
     private int saveChildChunks(String fileMd5, String parentId, String parentText, List<String> chunks,
                                 String userId, String orgTag, boolean isPublic,
-                                String knowledgeScope, String departmentId, int startingChunkId) {
+                                String knowledgeScope, String departmentId,
+                                Long categoryId, String categoryName, int startingChunkId) {
         int currentChunkId = startingChunkId;
         FileUpload.KnowledgeScope resolvedScope = resolveKnowledgeScope(knowledgeScope, isPublic);
         String resolvedDepartmentId = isBlank(departmentId) ? orgTag : departmentId;
@@ -295,6 +448,8 @@ public class ParseService {
             vector.setPublic(isPublic);
             vector.setKnowledgeScope(resolvedScope);
             vector.setDepartmentId(resolvedDepartmentId);
+            vector.setCategoryId(categoryId);
+            vector.setCategoryName(categoryName);
             documentVectorRepository.save(vector);
         }
         logger.info("成功保存 {} 个子块到数据库，parentId: {}", chunks.size(), parentId);

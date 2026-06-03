@@ -136,8 +136,76 @@ declare namespace Api {
       orgTagName: string | null;
       knowledgeScope: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
       departmentId: string | null;
+      categoryId: number | null;
+      categoryName: string | null;
+      cleaningRuleSetId: number | null;
       isPublic: boolean;
       fileList: import('naive-ui').UploadFileInfo[];
+    }
+
+    interface Category {
+      id: number;
+      name: string;
+      parentId?: number | null;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      departmentId?: string | null;
+      description?: string | null;
+      sortOrder: number;
+      enabled: boolean;
+    }
+
+    interface CategoryCreateForm {
+      name: string;
+      parentId?: number | null;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      departmentId?: string | null;
+      description?: string | null;
+      sortOrder?: number;
+    }
+
+    interface CleaningRuleConfig {
+      normalizeLineBreaks: boolean;
+      normalizeUnicodeSpaces: boolean;
+      normalizeWhitespace: boolean;
+      trimLines: boolean;
+      collapseBlankLines: boolean;
+      removeDuplicateLines: boolean;
+      minDuplicateLineLength: number;
+      dropLinePatterns: string[];
+    }
+
+    interface CleaningRuleSet extends CleaningRuleConfig {
+      id: number;
+      name: string;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      departmentId?: string | null;
+      description?: string | null;
+      enabled: boolean;
+      createdBy?: string | null;
+      createdAt?: string;
+      updatedAt?: string;
+    }
+
+    interface CleaningRuleSetCreateForm extends CleaningRuleConfig {
+      name: string;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      departmentId: string | null;
+      description: string | null;
+    }
+
+    interface CleaningPreviewRequest {
+      rawText: string;
+      ruleConfig?: CleaningRuleConfig | null;
+      ruleSetId?: number | null;
+    }
+
+    interface CleaningPreviewResult {
+      cleanedText: string;
+      originalChars: number;
+      cleanedChars: number;
+      removedChars: number;
+      duplicateLinesRemoved: number;
+      compressionRatio: number;
     }
 
     interface UploadTask {
@@ -152,6 +220,14 @@ declare namespace Api {
       orgTagName?: string | null;
       knowledgeScope?: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
       departmentId?: string | null;
+      categoryId?: number | null;
+      categoryName?: string | null;
+      cleaningRuleSetId?: number | null;
+      cleaningStatus?: 'PENDING' | 'CLEANING' | 'CLEANED' | 'FAILED';
+      originalChars?: number;
+      cleanedChars?: number;
+      removedChars?: number;
+      duplicateLinesRemoved?: number;
       public: boolean;
       isPublic: boolean;
       canView?: boolean;
@@ -168,7 +244,7 @@ declare namespace Api {
     }
     type List = Common.PaginatingQueryRecord<UploadTask>;
 
-    type Merge = Pick<UploadTask, 'fileMd5' | 'fileName'>;
+    type Merge = Pick<UploadTask, 'fileMd5' | 'fileName' | 'cleaningRuleSetId'>;
 
     interface Progress {
       uploaded: number[];
@@ -180,6 +256,10 @@ declare namespace Api {
       ready: boolean;
       message: string;
       components: Record<string, { status: string; detail?: string; bucket?: string; topic?: string }>;
+      uploadLimits?: {
+        maxFileSize: number;
+        maxFileSizeLabel: string;
+      };
     }
 
     interface Result {

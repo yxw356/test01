@@ -102,6 +102,14 @@ public class DocumentController {
         dto.put("public", file.isPublic());
         dto.put("knowledgeScope", documentPermissionService.effectiveScope(file).name());
         dto.put("departmentId", documentPermissionService.effectiveDepartmentId(file));
+        dto.put("categoryId", file.getCategoryId());
+        dto.put("categoryName", file.getCategoryName());
+        dto.put("cleaningRuleSetId", file.getCleaningRuleSetId());
+        dto.put("cleaningStatus", file.getCleaningStatus().name());
+        dto.put("originalChars", file.getOriginalChars());
+        dto.put("cleanedChars", file.getCleanedChars());
+        dto.put("removedChars", file.getRemovedChars());
+        dto.put("duplicateLinesRemoved", file.getDuplicateLinesRemoved());
         dto.put("canView", documentPermissionService.canView(currentUser, file));
         dto.put("canManage", documentPermissionService.canManage(currentUser, file));
         dto.put("createdAt", file.getCreatedAt());
@@ -201,6 +209,44 @@ public class DocumentController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
         }
     }
+
+    /**
+     * 重新提交清洗与索引任务（清洗规则调整或预览内容异常时使用）
+     */
+    @PostMapping("/{fileMd5}/reclean")
+    public ResponseEntity<?> retryCleaning(
+            @PathVariable String fileMd5,
+            @RequestAttribute("userId") String userId,
+            @RequestAttribute("role") String role,
+            @RequestBody(required = false) RecleanRequest request) {
+        try {
+            if (request == null || request.cleaningRuleSetId() == null) {
+                documentIndexService.retryCleaningAndIndexing(fileMd5, userId, role);
+            } else {
+                documentIndexService.retryCleaningAndIndexing(fileMd5, userId, role, request.cleaningRuleSetId());
+            }
+            Map<String, Object> response = new HashMap<>();
+            response.put("code", 200);
+            response.put("message", "清洗与索引任务已重新提交");
+            return ResponseEntity.ok(response);
+        } catch (CustomException e) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("code", e.getStatus().value());
+            response.put("message", e.getMessage());
+            return ResponseEntity.status(e.getStatus()).body(response);
+        } catch (Exception e) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("code", HttpStatus.INTERNAL_SERVER_ERROR.value());
+            response.put("message", "重新清洗失败: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+        }
+    }
+
+    public ResponseEntity<?> retryCleaning(String fileMd5, String userId, String role) {
+        return retryCleaning(fileMd5, userId, role, null);
+    }
+
+    public record RecleanRequest(Long cleaningRuleSetId) {}
     
     /**
      * 获取用户可访问的所有文件列表

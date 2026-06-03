@@ -78,6 +78,20 @@ file:
     buffer-size: 8192
     max-memory-threshold: 0.8
 
+knowledge:
+  upload:
+    max-file-size: 200MB
+  cleaning:
+    normalize-line-breaks: true
+    normalize-unicode-spaces: true
+    normalize-whitespace: true
+    trim-lines: true
+    collapse-blank-lines: true
+    remove-duplicate-lines: true
+    min-duplicate-line-length: 8
+    # 多条正则用 ;; 分隔。示例：^第\s*\d+\s*页\s*/\s*共\s*\d+\s*页$;;^内部资料$
+    drop-line-patterns: ""
+
 elasticsearch:
   host: localhost
   port: 9200

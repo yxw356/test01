@@ -84,6 +84,34 @@ public class FileUpload {
     @Column(name = "department_id")
     private String departmentId;
 
+    @Column(name = "category_id")
+    private Long categoryId;
+
+    @Column(name = "category_name", length = 120)
+    private String categoryName;
+
+    @Column(name = "cleaning_rule_set_id")
+    private Long cleaningRuleSetId;
+
+    /**
+     * 数据清洗状态：未清洗、清洗中、已清洗、失败。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "cleaning_status", nullable = false)
+    private CleaningStatus cleaningStatus = CleaningStatus.PENDING;
+
+    @Column(name = "original_chars", nullable = false)
+    private int originalChars = 0;
+
+    @Column(name = "cleaned_chars", nullable = false)
+    private int cleanedChars = 0;
+
+    @Column(name = "removed_chars", nullable = false)
+    private int removedChars = 0;
+
+    @Column(name = "duplicate_lines_removed", nullable = false)
+    private int duplicateLinesRemoved = 0;
+
     /**
      * 文件是否公开
      * true表示所有用户可访问，false表示仅组织内用户可访问
@@ -109,5 +137,12 @@ public class FileUpload {
         PUBLIC,
         DEPARTMENT,
         PRIVATE
+    }
+
+    public enum CleaningStatus {
+        PENDING,
+        CLEANING,
+        CLEANED,
+        FAILED
     }
 }

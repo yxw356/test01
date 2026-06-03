@@ -6,6 +6,10 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
   const activeUploads = ref<Set<string>>(new Set());
   const uploadPreflight = ref<Api.KnowledgeBase.UploadPreflight | null>(null);
   const uploadPreflightLoading = ref(false);
+  const categories = ref<Api.KnowledgeBase.Category[]>([]);
+  const categoryLoading = ref(false);
+  const cleaningRuleSets = ref<Api.KnowledgeBase.CleaningRuleSet[]>([]);
+  const cleaningRuleSetLoading = ref(false);
 
   function resetStore() {
     tasks.value = [];
@@ -36,6 +40,79 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
     return true;
   }
 
+  async function refreshCategories() {
+    categoryLoading.value = true;
+    const { error, data } = await request<Api.KnowledgeBase.Category[]>({
+      url: '/knowledge-categories'
+    });
+    categoryLoading.value = false;
+    if (!error) categories.value = data;
+    return !error;
+  }
+
+  async function createCategory(form: Api.KnowledgeBase.CategoryCreateForm) {
+    const { error } = await request<Api.KnowledgeBase.Category>({
+      url: '/knowledge-categories',
+      method: 'POST',
+      data: form
+    });
+    if (error) return false;
+    await refreshCategories();
+    return true;
+  }
+
+  async function refreshCleaningRuleSets() {
+    cleaningRuleSetLoading.value = true;
+    const { error, data } = await request<Api.KnowledgeBase.CleaningRuleSet[]>({
+      url: '/data-cleaning/rule-sets'
+    });
+    cleaningRuleSetLoading.value = false;
+    if (!error) cleaningRuleSets.value = data;
+    return !error;
+  }
+
+  async function createCleaningRuleSet(form: Api.KnowledgeBase.CleaningRuleSetCreateForm) {
+    const { error } = await request<Api.KnowledgeBase.CleaningRuleSet>({
+      url: '/data-cleaning/rule-sets',
+      method: 'POST',
+      data: form
+    });
+    if (error) return false;
+    await refreshCleaningRuleSets();
+    return true;
+  }
+
+  async function updateCleaningRuleSet(ruleSetId: number, form: Api.KnowledgeBase.CleaningRuleSetCreateForm) {
+    const { error } = await request<Api.KnowledgeBase.CleaningRuleSet>({
+      url: `/data-cleaning/rule-sets/${ruleSetId}`,
+      method: 'PUT',
+      data: form
+    });
+    if (error) return false;
+    await refreshCleaningRuleSets();
+    return true;
+  }
+
+  async function disableCleaningRuleSet(ruleSetId: number) {
+    const { error } = await request({
+      url: `/data-cleaning/rule-sets/${ruleSetId}`,
+      method: 'DELETE'
+    });
+    if (error) return false;
+    await refreshCleaningRuleSets();
+    return true;
+  }
+
+  async function previewCleaning(form: Api.KnowledgeBase.CleaningPreviewRequest) {
+    const { error, data } = await request<Api.KnowledgeBase.CleaningPreviewResult>({
+      url: '/data-cleaning/preview',
+      method: 'POST',
+      data: form
+    });
+    if (error) return null;
+    return data;
+  }
+
   async function uploadChunk(task: Api.KnowledgeBase.UploadTask): Promise<boolean> {
     if (!task.file) {
       task.uploadError = '请重新选择原文件后再续传';
@@ -64,6 +141,8 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
         orgTag: task.orgTag,
         knowledgeScope: task.knowledgeScope,
         departmentId: task.departmentId,
+        categoryId: task.categoryId,
+        cleaningRuleSetId: task.cleaningRuleSetId,
         isPublic: task.isPublic ?? false
       },
       headers: {
@@ -97,7 +176,7 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
       const { error } = await request({
         url: '/upload/merge',
         method: 'POST',
-        data: { fileMd5: task.fileMd5, fileName: task.fileName }
+        data: { fileMd5: task.fileMd5, fileName: task.fileName, cleaningRuleSetId: task.cleaningRuleSetId ?? null }
       });
       if (error) return false;
 
@@ -136,6 +215,7 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
         return;
       } else if (existingTask.status === UploadStatus.Break) {
         existingTask.file = file;
+        existingTask.cleaningRuleSetId = form.cleaningRuleSetId;
         existingTask.uploadError = undefined;
         existingTask.status = UploadStatus.Pending;
         startUpload();
@@ -157,6 +237,10 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
       canManage: true,
       knowledgeScope: form.knowledgeScope,
       departmentId: form.departmentId,
+      categoryId: form.categoryId,
+      categoryName: form.categoryName,
+      cleaningRuleSetId: form.cleaningRuleSetId,
+      cleaningStatus: 'PENDING',
       uploadedChunks: [],
       progress: 0,
       status: UploadStatus.Pending,
@@ -239,9 +323,20 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
     activeUploads,
     uploadPreflight,
     uploadPreflightLoading,
+    categories,
+    categoryLoading,
+    cleaningRuleSets,
+    cleaningRuleSetLoading,
     resetStore,
     refreshUploadPreflight,
     checkUploadPreflight,
+    refreshCategories,
+    createCategory,
+    refreshCleaningRuleSets,
+    createCleaningRuleSet,
+    updateCleaningRuleSet,
+    disableCleaningRuleSet,
+    previewCleaning,
     enqueueUpload,
     startUpload
   };

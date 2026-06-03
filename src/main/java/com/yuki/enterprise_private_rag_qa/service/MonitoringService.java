@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.util.unit.DataSize;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.time.Duration;
@@ -68,6 +69,9 @@ public class MonitoringService {
 
     @Value("${embedding.api.key:}")
     private String embeddingApiKey;
+
+    @Value("${knowledge.upload.max-file-size:200MB}")
+    private DataSize maxUploadFileSize;
 
     public MonitoringService(ElasticsearchClient esClient,
                              RedisTemplate<String, String> redisTemplate,
@@ -123,10 +127,22 @@ public class MonitoringService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ready", ready);
         result.put("components", components);
+        result.put("uploadLimits", Map.of(
+                "maxFileSize", maxUploadFileSize.toBytes(),
+                "maxFileSizeLabel", formatDataSize(maxUploadFileSize.toBytes())
+        ));
         result.put("message", ready
                 ? "上传服务已就绪"
                 : "上传依赖未启动：" + String.join("、", unavailable));
         return result;
+    }
+
+    private String formatDataSize(long bytes) {
+        double mb = bytes / 1024.0 / 1024.0;
+        if (mb >= 1) {
+            return String.format("%.2fMB", mb);
+        }
+        return String.format("%.2fKB", bytes / 1024.0);
     }
 
     private static String nullToEmpty(String value) {

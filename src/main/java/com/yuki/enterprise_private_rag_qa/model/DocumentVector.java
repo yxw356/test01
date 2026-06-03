@@ -67,6 +67,12 @@ public class DocumentVector {
      */
     @Column(name = "department_id", length = 50)
     private String departmentId;
+
+    @Column(name = "category_id")
+    private Long categoryId;
+
+    @Column(name = "category_name", length = 120)
+    private String categoryName;
     
     /**
      * 文件是否公开

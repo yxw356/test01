@@ -49,6 +49,11 @@ public class VectorizationService {
 
     public void vectorize(String fileMd5, String userId, String orgTag, boolean isPublic,
                           String knowledgeScope, String departmentId) {
+        vectorize(fileMd5, userId, orgTag, isPublic, knowledgeScope, departmentId, null, null);
+    }
+
+    public void vectorize(String fileMd5, String userId, String orgTag, boolean isPublic,
+                          String knowledgeScope, String departmentId, Long categoryId, String categoryName) {
         try {
             String resolvedKnowledgeScope = isBlank(knowledgeScope) ? defaultKnowledgeScope(isPublic) : knowledgeScope;
             String resolvedDepartmentId = isBlank(departmentId) ? orgTag : departmentId;
@@ -88,7 +93,9 @@ public class VectorizationService {
                             orgTag,
                             isPublic,
                             resolvedKnowledgeScope,
-                            resolvedDepartmentId
+                            resolvedDepartmentId,
+                            chunks.get(i).getCategoryId() != null ? chunks.get(i).getCategoryId() : categoryId,
+                            chunks.get(i).getCategoryName() != null ? chunks.get(i).getCategoryName() : categoryName
                     ))
                     .toList();
 
@@ -120,8 +127,9 @@ public class VectorizationService {
             }
             FileUpload meta = upload.get();
             try {
-                vectorize(fileMd5, meta.getUserId(), meta.getOrgTag(), meta.isPublic(),
-                        effectiveKnowledgeScope(meta), effectiveDepartmentId(meta));
+                        vectorize(fileMd5, meta.getUserId(), meta.getOrgTag(), meta.isPublic(),
+                        effectiveKnowledgeScope(meta), effectiveDepartmentId(meta),
+                        meta.getCategoryId(), meta.getCategoryName());
                 success++;
             } catch (Exception e) {
                 logger.error("重建索引失败, fileMd5={}", fileMd5, e);
@@ -144,11 +152,13 @@ public class VectorizationService {
         // 转换为 TextChunk 列表
         return vectors.stream()
                 .map(vector -> new TextChunk(
-                        vector.getChunkId(),
-                        vector.getParentId(),
-                        vector.getTextContent(),
-                        vector.getParentTextContent()
-                ))
+                    vector.getChunkId(),
+                    vector.getParentId(),
+                    vector.getTextContent(),
+                    vector.getParentTextContent(),
+                    vector.getCategoryId(),
+                    vector.getCategoryName()
+            ))
                 .toList();
     }
 
