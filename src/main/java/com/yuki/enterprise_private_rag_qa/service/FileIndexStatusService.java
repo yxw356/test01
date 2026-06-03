@@ -1,6 +1,7 @@
 package com.yuki.enterprise_private_rag_qa.service;
 
 import com.yuki.enterprise_private_rag_qa.model.FileIndexStatus;
+import com.yuki.enterprise_private_rag_qa.model.FileIndexStatus;
 import com.yuki.enterprise_private_rag_qa.model.FileUpload;
 import com.yuki.enterprise_private_rag_qa.repository.FileUploadRepository;
 import org.slf4j.Logger;
@@ -43,6 +44,9 @@ public class FileIndexStatusService {
         fileUploadRepository.findByFileMd5AndUserId(fileMd5, userId).ifPresentOrElse(file -> {
             file.setIndexStatus(indexStatus);
             file.setIndexError(indexError);
+            if (indexStatus >= FileIndexStatus.PENDING) {
+                file.setStatus(1);
+            }
             fileUploadRepository.save(file);
             logger.info("文件索引状态更新: fileMd5={}, userId={}, indexStatus={}", fileMd5, userId, indexStatus);
         }, () -> logger.warn("未找到文件记录，跳过索引状态更新: fileMd5={}, userId={}", fileMd5, userId));

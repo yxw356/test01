@@ -8,22 +8,57 @@ import SvgIcon from '@/components/custom/svg-icon.vue';
 import FilePreview from '@/components/custom/file-preview.vue';
 import UploadDialog from './modules/upload-dialog.vue';
 import SearchDialog from './modules/search-dialog.vue';
+import { fetchGetOrgTagList } from '@/service/api/org-tag';
 
 const appStore = useAppStore();
+const authStore = useAuthStore();
 
 // 文件预览相关状态
 const previewVisible = ref(false);
 const previewFileName = ref('');
 
-function apiFn() {
-  return fakePaginationRequest<Api.KnowledgeBase.List>({ url: '/documents/accessible' });
+const kbFilterOptions = ref<{ label: string; value: string }[]>([]);
+
+function apiFn(params?: { orgTag?: string | null }) {
+  const query = params?.orgTag ? { orgTag: params.orgTag } : undefined;
+  return fakePaginationRequest<Api.KnowledgeBase.List>({ url: '/documents/accessible', params: query });
+}
+
+function flattenKbTags(nodes: Api.OrgTag.Item[]): { label: string; value: string }[] {
+  const out: { label: string; value: string }[] = [];
+  function walk(list: Api.OrgTag.Item[]) {
+    list.forEach(n => {
+      if (n.tagId?.startsWith('KB_')) {
+        out.push({ label: n.name || n.tagId, value: n.tagId });
+      }
+      if (n.children?.length) walk(n.children);
+    });
+  }
+  walk(nodes);
+  return out;
+}
+
+async function loadKbFilterOptions() {
+  if (authStore.isAdmin) {
+    const { error, data } = await fetchGetOrgTagList();
+    if (!error && data?.length) {
+      kbFilterOptions.value = flattenKbTags(data);
+      return;
+    }
+  }
+  const { error, data } = await request<Api.OrgTag.Mine>({ url: '/users/org-tags' });
+  if (!error && data?.orgTagDetails) {
+    kbFilterOptions.value = data.orgTagDetails
+      .filter(t => t.tagId?.startsWith('KB_'))
+      .map(t => ({ label: t.name, value: t.tagId }));
+  }
 }
 
 function renderIcon(fileName: string) {
   const ext = getFileExt(fileName);
   if (ext) {
     if (uploadAccept.split(',').includes(`.${ext}`)) return <SvgIcon localIcon={ext} class="mx-4 text-12" />;
-    return <SvgIcon localIcon="dflt" class="mx-4 text-12" />;
+    return <SvgIcon icon="mdi:file-document-outline" class="mx-4 text-12" />;
   }
   return null;
 }
@@ -40,8 +75,9 @@ function closeFilePreview() {
   previewFileName.value = '';
 }
 
-const { columns, columnChecks, data, getData, loading } = useTable({
+const { columns, columnChecks, data, getData, loading, updateSearchParams } = useTable({
   apiFn,
+  apiParams: { orgTag: null as string | null },
   immediate: false,
   columns: () => [
     {
@@ -144,7 +180,16 @@ const indexPendingCount = computed(() =>
 
 let indexPollTimer: ReturnType<typeof setInterval> | null = null;
 
+const filterOrgTag = ref<string | null>(null);
+
+async function onKbFilterChange(tagId: string | null) {
+  filterOrgTag.value = tagId;
+  updateSearchParams({ orgTag: tagId });
+  await getList();
+}
+
 onMounted(async () => {
+  await loadKbFilterOptions();
   await getList();
   startIndexPolling();
 });
@@ -162,6 +207,20 @@ function startIndexPolling() {
   }, 5000);
 }
 
+/** 根据后端返回字段解析上传状态（兼容 status 未回写但已合并/已索引的记录） */
+function resolveUploadStatus(item: Api.KnowledgeBase.UploadTask): UploadStatus {
+  if (item.status === UploadStatus.Completed) {
+    return UploadStatus.Completed;
+  }
+  if (item.mergedAt || (item.indexStatus !== undefined && item.indexStatus >= IndexStatus.Pending)) {
+    return UploadStatus.Completed;
+  }
+  if (item.status === UploadStatus.Uploading) {
+    return UploadStatus.Break;
+  }
+  return UploadStatus.Break;
+}
+
 /** 异步获取列表函数 该函数主要用于更新或初始化上传任务列表 它首先调用getData函数获取数据，然后根据获取到的数据状态更新任务列表 */
 async function getList() {
   // 等待获取最新数据
@@ -174,8 +233,11 @@ async function getList() {
 
   // 遍历获取到的数据，以处理每个项目
   data.value.forEach(item => {
+    const resolvedStatus = resolveUploadStatus(item);
+    item.status = resolvedStatus;
+
     // 检查项目状态是否为已完成
-    if (item.status === UploadStatus.Completed) {
+    if (resolvedStatus === UploadStatus.Completed) {
       // 查找任务列表中是否有匹配的文件MD5
       const index = tasks.value.findIndex(task => task.fileMd5 === item.fileMd5);
       // 如果找到匹配项，则更新其状态
@@ -188,8 +250,7 @@ async function getList() {
         tasks.value.push(item);
       }
     } else if (!tasks.value.some(task => task.fileMd5 === item.fileMd5)) {
-      // 如果项目状态不是已完成，并且任务列表中没有相同的文件MD5，则将该项目的状态设置为中断，并添加到任务列表中
-      item.status = UploadStatus.Break;
+      // 未完成的上传任务（无本地 File 对象时需通过续传按钮重新选择文件）
       tasks.value.push(item);
     }
   });
@@ -392,6 +453,16 @@ async function onBeforeUpload(
       <template #header-extra>
         <TableHeaderOperation v-model:columns="columnChecks" :loading="loading" @add="handleUpload" @refresh="getList">
           <template #prefix>
+            <NSelect
+              v-if="kbFilterOptions.length"
+              v-model:value="filterOrgTag"
+              class="w-180px!"
+              size="small"
+              clearable
+              placeholder="业务知识库"
+              :options="kbFilterOptions"
+              @update:value="onKbFilterChange"
+            />
             <NButton size="small" ghost type="primary" @click="handleSearch">
               <template #icon>
                 <icon-ic-round-search class="text-icon" />
@@ -419,8 +490,20 @@ async function onBeforeUpload(
     <SearchDialog v-model:visible="searchVisible" />
 
     <!-- 文件预览弹窗 -->
-    <NModal v-model:show="previewVisible" preset="card" title="文件预览" class="paper-modal max-w-1000px w-[80%]">
-      <FilePreview :file-name="previewFileName" :visible="previewVisible" @close="closeFilePreview" />
+    <NModal
+      v-model:show="previewVisible"
+      preset="card"
+      title="文件预览"
+      class="paper-modal max-w-1000px w-[80%]"
+      @after-leave="closeFilePreview"
+    >
+      <FilePreview
+        v-if="previewFileName"
+        in-modal
+        :file-name="previewFileName"
+        :visible="previewVisible"
+        @close="closeFilePreview"
+      />
     </NModal>
   </div>
 </template>

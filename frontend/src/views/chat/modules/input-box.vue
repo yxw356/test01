@@ -1,5 +1,6 @@
 <script setup lang="ts">
 const chatStore = useChatStore();
+const authStore = useAuthStore();
 const { input, list, wsStatus, wsData } = storeToRefs(chatStore);
 
 const latestMessage = computed(() => {
@@ -12,23 +13,44 @@ const isSending = computed(() => {
   );
 });
 
-const sendable = computed(
-  () => (!input.value.message && !isSending.value) || ['CLOSED', 'CONNECTING'].includes(wsStatus.value)
-);
+const sendable = computed(() => {
+  if (!input.value.message && !isSending.value) return true;
+  if (!authStore.token) return true;
+  return ['CLOSED', 'CONNECTING'].includes(wsStatus.value);
+});
 
 watch(wsData, val => {
-  const data = JSON.parse(val);
+  if (!val) return;
+
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(val);
+  } catch {
+    return;
+  }
+
   const assistant = list.value[list.value.length - 1];
   if (!assistant || assistant.role !== 'assistant') return;
+
+  if (data.error) {
+    assistant.status = 'error';
+    return;
+  }
 
   if (data.type === 'completion' && data.status === 'finished' && assistant.status !== 'error') {
     assistant.status = 'finished';
     if (Array.isArray(data.citations) && data.citations.length > 0) {
-      assistant.citations = data.citations;
+      assistant.citations = data.citations as Api.Chat.RetrievalCitation[];
     }
-  } else if (data.type === 'stop') assistant.status = 'finished';
-  if (data.error) assistant.status = 'error';
-  else if (data.chunk) {
+    return;
+  }
+
+  if (data.type === 'stop') {
+    assistant.status = 'finished';
+    return;
+  }
+
+  if (typeof data.chunk === 'string' && data.chunk) {
     assistant.status = 'loading';
     assistant.content += data.chunk;
   }
@@ -47,17 +69,30 @@ const handleSend = async () => {
     return;
   }
 
+  const question = input.value.message;
+  input.value.message = '';
+
+  if (wsStatus.value !== 'OPEN') {
+    chatStore.wsOpen();
+    window.$message?.warning('正在连接知识库助手，请稍候再试');
+    input.value.message = question;
+    return;
+  }
+
   list.value.push({
-    content: input.value.message,
-    role: 'user'
+    content: question,
+    role: 'user',
+    timestamp: new Date().toISOString(),
+    status: 'finished'
   });
-  chatStore.wsSend(input.value.message);
   list.value.push({
     content: '',
     role: 'assistant',
-    status: 'pending'
+    status: 'pending',
+    timestamp: new Date().toISOString()
   });
-  input.value.message = '';
+  chatStore.wsSend(question);
+  chatStore.scrollToBottom?.();
 };
 
 const inputRef = ref();

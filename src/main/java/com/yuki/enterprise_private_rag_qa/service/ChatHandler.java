@@ -9,6 +9,7 @@ import com.yuki.enterprise_private_rag_qa.model.AuditAction;
 import com.yuki.enterprise_private_rag_qa.model.RetrievalCitation;
 import com.yuki.enterprise_private_rag_qa.service.rag.RagPipeline;
 import com.yuki.enterprise_private_rag_qa.utils.AuditSupport;
+import com.yuki.enterprise_private_rag_qa.utils.ContextSnippetUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -108,9 +109,11 @@ public class ChatHandler {
                     ragResult.usedSupplementaryRetrieval(),
                     ragResult.isFallback());
 
-            // 5. 构建上下文
-            String context = buildContext(ragResult.finalDocs());
-            sessionRetrievalResults.put(sessionId, ragResult.finalDocs());
+            // 5. 补充文件名并构建上下文
+            List<SearchResult> finalDocs = ragResult.finalDocs();
+            searchService.enrichWithFileNames(finalDocs);
+            String context = buildContext(userMessage, finalDocs);
+            sessionRetrievalResults.put(sessionId, finalDocs);
             logger.info("RAG context built, contextLength: {}", context.length());
 
             // 6. 调用 DeepSeek API 并处理流式响应
@@ -139,7 +142,7 @@ public class ChatHandler {
                     }
                     handleError(session, error);
                     // 发送响应完成通知（错误情况）
-                    sendCompletionNotification(session, List.of());
+                    sendCompletionNotification(session, List.of(), userMessage);
                     // 清理会话响应构建器
                     responseBuilders.remove(sessionId);
                 },
@@ -181,7 +184,7 @@ public class ChatHandler {
         }
 
         List<SearchResult> retrievalResults = sessionRetrievalResults.remove(sessionId);
-        sendCompletionNotification(session, retrievalResults);
+        sendCompletionNotification(session, retrievalResults, userMessage);
 
         if (!completeResponse.isBlank()) {
             persistConversationTurn(userId, conversationId, userMessage, completeResponse, retrievalResults);
@@ -265,7 +268,7 @@ public class ChatHandler {
                                          String response,
                                          List<SearchResult> retrievalResults) {
         List<RetrievalCitation> citations = ConversationService.buildCitations(
-                retrievalResults == null ? List.of() : retrievalResults);
+                retrievalResults == null ? List.of() : retrievalResults, userMessage);
         updateConversationHistory(conversationId, userMessage, response, citations);
         try {
             conversationService.recordConversation(
@@ -317,7 +320,7 @@ public class ChatHandler {
         }
     }
 
-    private String buildContext(List<SearchResult> searchResults) {
+    private String buildContext(String query, List<SearchResult> searchResults) {
         if (searchResults == null || searchResults.isEmpty()) {
             // 返回空字符串，让 DeepSeekClient 按"无检索结果"逻辑处理
             return "";
@@ -326,12 +329,11 @@ public class ChatHandler {
         StringBuilder context = new StringBuilder();
         for (int i = 0; i < searchResults.size(); i++) {
             SearchResult result = searchResults.get(i);
-            String snippet = result.getParentTextContent() != null && !result.getParentTextContent().isBlank()
-                    ? result.getParentTextContent()
-                    : result.getTextContent();
-            String fileLabel = result.getFileName() != null ? result.getFileName() : "unknown";
-            String parentLabel = result.getParentId() != null ? result.getParentId() : "unknown-parent";
-            context.append(String.format("[来源#%d: %s]\nparent_id: %s\n%s\n\n", i + 1, fileLabel, parentLabel, snippet));
+            String snippet = ContextSnippetUtils.extractExcerpt(query, result);
+            String fileLabel = result.getFileName() != null && !result.getFileName().isBlank()
+                    ? result.getFileName()
+                    : (result.getFileMd5() != null ? result.getFileMd5() : "unknown");
+            context.append(String.format("[来源#%d: %s]\n%s\n\n", i + 1, fileLabel, snippet));
         }
         return context.toString();
     }
@@ -354,11 +356,13 @@ public class ChatHandler {
         }
     }
 
-    private void sendCompletionNotification(WebSocketSession session, List<SearchResult> retrievalResults) {
+    private void sendCompletionNotification(WebSocketSession session,
+                                            List<SearchResult> retrievalResults,
+                                            String query) {
         try {
             long currentTime = System.currentTimeMillis();
             List<RetrievalCitation> citations = ConversationService.buildCitations(
-                    retrievalResults == null ? List.of() : retrievalResults);
+                    retrievalResults == null ? List.of() : retrievalResults, query);
             Map<String, Object> notification = new HashMap<>();
             notification.put("type", "completion");
             notification.put("status", "finished");

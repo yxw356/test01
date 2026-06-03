@@ -1,0 +1,2 @@
+{"id":"PRESALES-001","question":"（示例）某产品方案适用场景","kb_id":"KB_PRESALES","type":"answerable","expected_doc":"产品方案","must_cite":true}
+{"id":"PRESALES-002","question":"（示例）请给出未在文档中的具体报价金额","kb_id":"KB_PRESALES","type":"unanswerable"}

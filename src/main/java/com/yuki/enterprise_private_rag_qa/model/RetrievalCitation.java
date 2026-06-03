@@ -1,6 +1,7 @@
 package com.yuki.enterprise_private_rag_qa.model;
 
 import com.yuki.enterprise_private_rag_qa.entity.SearchResult;
+import com.yuki.enterprise_private_rag_qa.utils.ContextSnippetUtils;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -23,6 +24,10 @@ public class RetrievalCitation {
     private static final int SNIPPET_MAX = 300;
 
     public static RetrievalCitation fromSearchResult(int index, SearchResult result) {
+        return fromSearchResult(index, result, null);
+    }
+
+    public static RetrievalCitation fromSearchResult(int index, SearchResult result, String query) {
         RetrievalCitation citation = new RetrievalCitation();
         citation.setIndex(index);
         citation.setFileMd5(result.getFileMd5());
@@ -30,13 +35,13 @@ public class RetrievalCitation {
         citation.setChunkId(result.getChunkId());
         citation.setParentId(result.getParentId());
         citation.setScore(result.getScore());
-        citation.setSnippet(truncateSnippet(result));
+        citation.setSnippet(truncateSnippet(result, query));
         return citation;
     }
 
-    private static String truncateSnippet(SearchResult result) {
-        String text = result.getParentTextContent();
-        if (text == null || text.isBlank()) {
+    private static String truncateSnippet(SearchResult result, String query) {
+        String text = ContextSnippetUtils.extractExcerpt(query, result, SNIPPET_MAX);
+        if (text.isBlank()) {
             text = result.getTextContent();
         }
         if (text == null) {

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { NScrollbar } from 'naive-ui';
 import { VueMarkdownItProvider } from 'vue-markdown-shiki';
+import { NModal } from 'naive-ui';
+import FilePreview from '@/components/custom/file-preview.vue';
 import ChatMessage from './chat-message.vue';
 
 defineOptions({
@@ -8,7 +10,7 @@ defineOptions({
 });
 
 const chatStore = useChatStore();
-const { list } = storeToRefs(chatStore);
+const { list, previewVisible, previewFileName } = storeToRefs(chatStore);
 
 const suggestedQuestions = [
   '查询最新报销制度中的审批流程',
@@ -39,9 +41,7 @@ const params = computed(() => {
   };
 });
 
-watchEffect(() => {
-  getList();
-});
+watch(params, () => getList(), { deep: true });
 
 async function getList() {
   loading.value = true;
@@ -49,14 +49,16 @@ async function getList() {
     url: 'users/conversation',
     params: params.value
   });
-  if (!error) {
-    list.value = data;
+  if (!error && !chatStore.isActiveChat()) {
+    list.value = data ?? [];
   }
   loading.value = false;
 }
 
 onMounted(() => {
   chatStore.scrollToBottom = scrollToBottom;
+  chatStore.wsOpen();
+  getList();
 });
 
 function fillQuestion(question: string) {
@@ -65,22 +67,22 @@ function fillQuestion(question: string) {
 </script>
 
 <template>
-  <Suspense>
-    <NScrollbar ref="scrollbarRef" class="h-0 flex-auto">
-      <Teleport defer to="#header-extra">
-        <div class="h-full flex items-center px-6">
-          <NForm :model="params" label-placement="left" :show-feedback="false" inline>
-            <NFormItem label="时间">
-              <NDatePicker v-model:value="range" type="daterange" />
-            </NFormItem>
-          </NForm>
-        </div>
-      </Teleport>
-      <NSpin :show="loading">
+  <div class="chat-list-root h-full min-h-360px flex flex-col">
+    <Teleport defer to="#header-extra">
+      <div class="h-full flex items-center px-6">
+        <NForm :model="params" label-placement="left" :show-feedback="false" inline>
+          <NFormItem label="时间">
+            <NDatePicker v-model:value="range" type="daterange" />
+          </NFormItem>
+        </NForm>
+      </div>
+    </Teleport>
+    <NScrollbar ref="scrollbarRef" class="min-h-0 flex-1">
+      <NSpin :show="loading" class="min-h-360px">
         <VueMarkdownItProvider>
-          <ChatMessage v-for="(item, index) in list" :key="index" :msg="item" />
+          <ChatMessage v-for="(item, index) in list" :key="`${item.role}-${item.timestamp ?? index}-${index}`" :msg="item" />
         </VueMarkdownItProvider>
-        <div v-if="!loading && !list.length" class="empty-workbench flex-col items-center justify-center py-22">
+        <div v-if="!loading && !list.length" class="empty-workbench flex flex-col items-center justify-center py-22">
           <div class="empty-mark flex-center">
             <icon-solar:chat-square-like-bold-duotone class="text-30px text-primary" />
           </div>
@@ -96,7 +98,22 @@ function fillQuestion(question: string) {
         </div>
       </NSpin>
     </NScrollbar>
-  </Suspense>
+    <NModal
+      v-model:show="previewVisible"
+      preset="card"
+      title="文件预览"
+      class="paper-modal max-w-1000px w-[80%]"
+      @after-leave="chatStore.closeFilePreview"
+    >
+      <FilePreview
+        v-if="previewFileName"
+        in-modal
+        :file-name="previewFileName"
+        :visible="previewVisible"
+        @close="chatStore.closeFilePreview"
+      />
+    </NModal>
+  </div>
 </template>
 
 <style scoped lang="scss">

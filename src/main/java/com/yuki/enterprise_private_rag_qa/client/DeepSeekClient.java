@@ -96,6 +96,8 @@ public class DeepSeekClient {
         if (gen.getMaxTokens() != null) {
             request.put("max_tokens", gen.getMaxTokens());
         }
+        // Qwen3 等模型默认可能输出思考过程；关闭后只返回最终回答
+        request.put("chat_template_kwargs", Map.of("enable_thinking", false));
         return request;
     }
     
@@ -112,6 +114,7 @@ public class DeepSeekClient {
             sysBuilder.append(rules).append("\n");
         }
         sysBuilder.append("本轮参考信息会随当前用户问题一起给出。回答当前问题时，以本轮参考信息为准，不要沿用历史中的旧检索结论。");
+        sysBuilder.append("严禁输出思考过程、英文分析或中间推理，只输出面向用户的最终简体中文回答。");
 
         String systemContent = sysBuilder.toString();
         messages.add(Map.of(
@@ -139,6 +142,7 @@ public class DeepSeekClient {
         builder.append("请严格根据下面的本轮参考信息回答问题。")
                 .append("如果参考信息中能直接或间接回答问题，请优先使用参考信息；")
                 .append("只有参考信息确实没有答案时，才回答“暂无相关信息”。")
+                .append("数字、单位、面积、金额必须与参考原文完全一致，禁止改写位数。")
                 .append("引用来源时使用“(来源#编号: 文件名)”格式，不要输出 <<REF>> 或 <<END>> 标记。\n\n")
                 .append(refStart).append("\n");
 
@@ -190,7 +194,15 @@ public class DeepSeekClient {
     }
 
     private String stripThinking(String content) {
-        return content.replaceAll("(?s)<think>.*?</think>", "").trim();
+        String withoutTags = content.replaceAll("(?s)<think>.*?</think>", "").trim();
+        int answerStart = withoutTags.indexOf("最终回答");
+        if (answerStart >= 0) {
+            return withoutTags.substring(answerStart).trim();
+        }
+        if (withoutTags.startsWith("Here's a thinking process") || withoutTags.startsWith("Here is a thinking process")) {
+            return "";
+        }
+        return withoutTags;
     }
 
     private boolean isNoResultAnswer(String content) {
@@ -206,11 +218,15 @@ public class DeepSeekClient {
         private static final String THINK_END = "</think>";
 
         private boolean inThinking;
+        private boolean suppressPlainTextThinking;
         private String pending = "";
 
         private String filter(String chunk) {
             String text = pending + chunk;
             pending = "";
+            if (suppressPlainTextThinking) {
+                return filterPlainTextThinking(text);
+            }
             StringBuilder visible = new StringBuilder();
             int index = 0;
 
@@ -232,7 +248,7 @@ public class DeepSeekClient {
                     int emitEnd = text.length() - keep;
                     visible.append(text, index, emitEnd);
                     pending = text.substring(emitEnd);
-                    return visible.toString();
+                    return filterPlainTextThinking(visible.toString());
                 }
 
                 visible.append(text, index, start);
@@ -240,7 +256,41 @@ public class DeepSeekClient {
                 inThinking = true;
             }
 
-            return visible.toString();
+            return filterPlainTextThinking(visible.toString());
+        }
+
+        private String filterPlainTextThinking(String text) {
+            if (text == null || text.isBlank()) {
+                return text == null ? "" : text;
+            }
+            String normalized = text.stripLeading();
+            if (normalized.startsWith("Here's a thinking process")
+                    || normalized.startsWith("Here is a thinking process")
+                    || normalized.startsWith("Thinking process:")) {
+                suppressPlainTextThinking = true;
+                return "";
+            }
+            if (suppressPlainTextThinking) {
+                int answerStart = findFinalAnswerStart(text);
+                if (answerStart >= 0) {
+                    suppressPlainTextThinking = false;
+                    return text.substring(answerStart).stripLeading();
+                }
+                return "";
+            }
+            return text;
+        }
+
+        private int findFinalAnswerStart(String text) {
+            String[] markers = {"最终回答", "结论", "Answer:", "Final answer:", "因此，", "所以，", "基地", "暂无相关信息"};
+            int best = -1;
+            for (String marker : markers) {
+                int idx = text.indexOf(marker);
+                if (idx >= 0 && (best < 0 || idx < best)) {
+                    best = idx;
+                }
+            }
+            return best;
         }
 
         private static String keepPossibleTagSuffix(String text, String tag) {

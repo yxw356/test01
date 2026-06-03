@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ChangePasswordCard from './modules/change-password-card.vue';
+
 const { userInfo } = storeToRefs(useAuthStore());
 
 const tags = ref<Api.OrgTag.Mine>({
@@ -48,7 +50,8 @@ const setPrimaryOrg = async () => {
 
 <template>
   <NSpin :show="loading">
-    <div class="paper-page flex-cc">
+    <div class="paper-page flex flex-col items-center gap-6 py-6">
+      <ChangePasswordCard />
       <NCard
         class="paper-card min-h-400px min-w-600px w-50vw card-wrapper"
         :segmented="{ content: true, footer: 'soft' }"

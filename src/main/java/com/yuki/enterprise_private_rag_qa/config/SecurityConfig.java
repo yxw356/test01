@@ -63,7 +63,8 @@ public class SecurityConfig {
                             // 管理员专属接口 - 知识库管理、系统状态、用户活动监控
                             .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                             // 用户组织标签管理接口
-                            .requestMatchers("/api/v1/users/primary-org").hasAnyRole("USER", "ADMIN")
+                            .requestMatchers("/api/v1/users/primary-org", "/api/v1/users/password")
+                                    .hasAnyRole("USER", "ADMIN")
                             // 其他请求需要认证
                             .anyRequest().authenticated())
                     // 配置会话管理策略

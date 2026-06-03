@@ -88,12 +88,16 @@ public class ConversationService {
     }
 
     public static List<RetrievalCitation> buildCitations(List<SearchResult> results) {
+        return buildCitations(results, null);
+    }
+
+    public static List<RetrievalCitation> buildCitations(List<SearchResult> results, String query) {
         if (results == null || results.isEmpty()) {
             return List.of();
         }
         List<RetrievalCitation> citations = new ArrayList<>();
         for (int i = 0; i < results.size(); i++) {
-            citations.add(RetrievalCitation.fromSearchResult(i + 1, results.get(i)));
+            citations.add(RetrievalCitation.fromSearchResult(i + 1, results.get(i), query));
         }
         return citations;
     }

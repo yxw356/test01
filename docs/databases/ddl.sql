@@ -91,3 +91,8 @@ CREATE TABLE conversations (
 ALTER TABLE file_upload
     ADD COLUMN index_status TINYINT NOT NULL DEFAULT 2 COMMENT '0待索引 1索引中 2已索引 3失败' AFTER status,
     ADD COLUMN index_error VARCHAR(512) DEFAULT NULL COMMENT '索引失败原因' AFTER index_status;
+
+-- v1.3：修正「已合并/已索引但 status 仍为 0」的历史数据
+UPDATE file_upload
+SET status = 1
+WHERE merged_at IS NOT NULL OR index_status >= 1;

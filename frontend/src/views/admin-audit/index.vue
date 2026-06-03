@@ -1,12 +1,14 @@
 <script setup lang="tsx">
 import { NButton, NTag } from 'naive-ui';
 import type { DataTableColumns } from 'naive-ui';
+import { fakePaginationRequest } from '@/service/request';
 
 defineOptions({ name: 'AdminAudit' });
 
 const actionOptions = [
   { label: '全部', value: '' },
   { label: '登录', value: 'LOGIN' },
+  { label: '改密', value: 'PASSWORD_CHANGE' },
   { label: '上传', value: 'UPLOAD' },
   { label: '删除', value: 'DELETE' },
   { label: '检索', value: 'SEARCH' },
@@ -72,7 +74,10 @@ async function fetchLogs() {
   if (searchParams.userId.trim()) params.userId = searchParams.userId.trim();
   if (searchParams.action) params.action = searchParams.action;
 
-  const { error, data: response } = await request<{ data: Api.Admin.AuditLog[]; total: number }>({
+  const { error, data: response } = await fakePaginationRequest<{
+    data: Api.Admin.AuditLog[];
+    total: number;
+  }>({
     url: '/admin/audit-logs',
     params
   });

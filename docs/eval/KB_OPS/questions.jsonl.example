@@ -1,0 +1,2 @@
+{"id":"OPS-001","question":"（示例）某故障现象的标准处理步骤","kb_id":"KB_OPS","type":"answerable","expected_doc":"故障手册","must_cite":true}
+{"id":"OPS-002","question":"（示例）库外制度流程问题","kb_id":"KB_OPS","type":"cross_kb_negative","negative_cross_kb":"KB_POLICY"}

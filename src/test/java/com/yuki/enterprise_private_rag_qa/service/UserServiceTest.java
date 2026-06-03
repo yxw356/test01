@@ -128,4 +128,43 @@ void testAuthenticateUser_Success() {
         assertEquals("Invalid username or password", exception.getMessage());
         assertEquals(HttpStatus.UNAUTHORIZED, exception.getStatus());
     }
+
+    @Test
+    void testChangePassword_Success() {
+        String oldRaw = "admin123";
+        User user = new User();
+        user.setUsername("admin");
+        user.setPassword(PasswordUtil.encode(oldRaw));
+        when(userRepository.findByUsername("admin")).thenReturn(Optional.of(user));
+
+        userService.changePassword("admin", oldRaw, "newpass9");
+
+        verify(userRepository, times(1)).save(user);
+        assertTrue(PasswordUtil.matches("newpass9", user.getPassword()));
+    }
+
+    @Test
+    void testChangePassword_WrongOldPassword() {
+        User user = new User();
+        user.setUsername("admin");
+        user.setPassword(PasswordUtil.encode("admin123"));
+        when(userRepository.findByUsername("admin")).thenReturn(Optional.of(user));
+
+        CustomException ex = assertThrows(CustomException.class,
+                () -> userService.changePassword("admin", "wrong", "newpass9"));
+        assertEquals("Current password is incorrect", ex.getMessage());
+        assertEquals(HttpStatus.UNAUTHORIZED, ex.getStatus());
+    }
+
+    @Test
+    void testChangePassword_InvalidNewPassword() {
+        User user = new User();
+        user.setUsername("admin");
+        user.setPassword(PasswordUtil.encode("admin123"));
+        when(userRepository.findByUsername("admin")).thenReturn(Optional.of(user));
+
+        CustomException ex = assertThrows(CustomException.class,
+                () -> userService.changePassword("admin", "admin123", "short"));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+    }
 }

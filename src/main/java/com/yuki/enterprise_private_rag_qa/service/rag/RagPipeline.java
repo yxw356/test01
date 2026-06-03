@@ -3,6 +3,7 @@ package com.yuki.enterprise_private_rag_qa.service.rag;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import com.yuki.enterprise_private_rag_qa.config.RagProperties;
 import com.yuki.enterprise_private_rag_qa.entity.SearchResult;
+import com.yuki.enterprise_private_rag_qa.model.query.Intent;
 import com.yuki.enterprise_private_rag_qa.model.query.MmrDecision;
 import com.yuki.enterprise_private_rag_qa.model.query.QueryInfo;
 import com.yuki.enterprise_private_rag_qa.model.query.ReflectionResult;
@@ -11,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -112,7 +114,13 @@ public class RagPipeline {
 
             // Phase 6.4: 父块聚合 —— child chunks → parent blocks
             List<SearchResult> finalDocs = reflectionResult.finalDocs();
-            if (ragProperties.getFinalSelection().isEnableParentAggregation()) {
+            boolean precisionIntent = Intent.isPrecisionIntent(queryInfo.getIntent());
+            if (precisionIntent) {
+                int limit = Math.min(3, finalDocs.size());
+                finalDocs = new ArrayList<>(finalDocs.subList(0, limit));
+                logger.info("[Phase 6.4] Precision intent: skip parent aggregation, keep top {} child chunks",
+                        finalDocs.size());
+            } else if (ragProperties.getFinalSelection().isEnableParentAggregation()) {
                 long tAgg = System.currentTimeMillis();
                 int parentTopK = Math.min(ragProperties.getFinalSelection().getTopK(), finalDocs.size());
                 finalDocs = parentAggregator.aggregate(finalDocs, parentTopK);
