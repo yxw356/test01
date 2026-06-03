@@ -198,6 +198,59 @@ public class UserController {
         }
     }
     
+    // 修改当前用户密码
+    @PutMapping("/password")
+    public ResponseEntity<?> changePassword(
+            @RequestHeader("Authorization") String token,
+            @RequestBody ChangePasswordRequest request,
+            HttpServletRequest httpRequest) {
+        LogUtils.PerformanceMonitor monitor = LogUtils.startPerformanceMonitor("CHANGE_PASSWORD");
+        String username = null;
+        long start = System.currentTimeMillis();
+        try {
+            username = jwtUtils.extractUsernameFromToken(token.replace("Bearer ", ""));
+            if (username == null || username.isEmpty()) {
+                throw new CustomException("Invalid token", HttpStatus.UNAUTHORIZED);
+            }
+            if (request.oldPassword() == null || request.oldPassword().isEmpty()
+                    || request.newPassword() == null || request.newPassword().isEmpty()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("code", 400, "message", "Old and new password cannot be empty"));
+            }
+
+            userService.changePassword(username, request.oldPassword(), request.newPassword());
+
+            User user = userRepository.findByUsername(username)
+                    .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
+            jwtUtils.invalidateAllUserTokens(String.valueOf(user.getId()));
+
+            LogUtils.logUserOperation(username, "CHANGE_PASSWORD", "password_update", "SUCCESS");
+            auditService.recordSuccess(String.valueOf(user.getId()), username, AuditAction.PASSWORD_CHANGE,
+                    "user", username, "password changed", AuditSupport.clientIp(httpRequest),
+                    System.currentTimeMillis() - start);
+            monitor.end("修改密码成功");
+
+            return ResponseEntity.ok(Map.of(
+                    "code", 200,
+                    "message", "Password changed successfully, please login again"));
+        } catch (CustomException e) {
+            LogUtils.logBusinessError("CHANGE_PASSWORD", username, "修改密码失败: %s", e, e.getMessage());
+            if (username != null) {
+                auditService.recordFailure(null, username, AuditAction.PASSWORD_CHANGE, "user",
+                        username, e.getMessage(), AuditSupport.clientIp(httpRequest),
+                        System.currentTimeMillis() - start);
+            }
+            monitor.end("修改密码失败: " + e.getMessage());
+            return ResponseEntity.status(e.getStatus())
+                    .body(Map.of("code", e.getStatus().value(), "message", e.getMessage()));
+        } catch (Exception e) {
+            LogUtils.logBusinessError("CHANGE_PASSWORD", username, "修改密码异常: %s", e, e.getMessage());
+            monitor.end("修改密码异常: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("code", 500, "message", "Internal server error"));
+        }
+    }
+
     // 设置用户主组织标签
     @PutMapping("/primary-org")
     public ResponseEntity<?> setPrimaryOrg(@RequestHeader("Authorization") String token, @RequestBody PrimaryOrgRequest request) {
@@ -345,3 +398,5 @@ record UserRequest(String username, String password) {}
 
 // 主组织标签请求记录类
 record PrimaryOrgRequest(String primaryOrg) {}
+
+record ChangePasswordRequest(String oldPassword, String newPassword) {}

@@ -4,7 +4,7 @@ import InputBox from './modules/input-box.vue';
 </script>
 
 <template>
-  <div class="paper-page h-full flex flex-col gap-4">
+  <div class="paper-page min-h-500px h-full flex flex-col gap-4 overflow-hidden">
     <section class="rag-workbench-header flex items-center justify-between gap-4">
       <div class="min-w-0">
         <div class="flex items-center gap-2">
@@ -23,10 +23,10 @@ import InputBox from './modules/input-box.vue';
         <NTag :bordered="false" size="small" type="success">来源追溯</NTag>
       </div>
     </section>
-    <div class="paper-stage min-h-0 flex flex-col flex-1 card-wrapper">
-      <ChatList />
+    <div class="paper-stage min-h-0 flex flex-1 flex-col overflow-hidden card-wrapper">
+      <ChatList class="min-h-0 flex-1" />
     </div>
-    <InputBox />
+    <InputBox class="shrink-0" />
   </div>
 </template>
 

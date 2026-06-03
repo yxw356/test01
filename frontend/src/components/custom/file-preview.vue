@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { NButton, NSpin } from 'naive-ui';
 import { request } from '@/service/request';
 import { getFileExt } from '@/utils/common';
@@ -8,30 +8,32 @@ import SvgIcon from '@/components/custom/svg-icon.vue';
 interface Props {
   fileName: string;
   visible: boolean;
+  /** 嵌入弹窗时去掉侧栏样式 */
+  inModal?: boolean;
 }
 
 interface Emits {
   (e: 'close'): void;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), { inModal: false });
 const emit = defineEmits<Emits>();
+
+const LOCAL_FILE_ICONS = ['pdf', 'doc', 'docx', 'txt', 'md', 'jpg', 'jpeg', 'png', 'gif'] as const;
+const LOCAL_ICON_ALIAS: Record<string, string> = { jpeg: 'jpg' };
+
+const fileIcon = computed(() => {
+  const ext = getFileExt(props.fileName)?.toLowerCase();
+  if (ext && LOCAL_FILE_ICONS.includes(ext as (typeof LOCAL_FILE_ICONS)[number])) {
+    return { localIcon: LOCAL_ICON_ALIAS[ext] || ext };
+  }
+  return { icon: 'mdi:file-document-outline' };
+});
 
 const loading = ref(false);
 const downloading = ref(false);
 const content = ref('');
 const error = ref('');
-
-function getFileIcon(fileName: string) {
-  const ext = getFileExt(fileName);
-
-  if (ext) {
-    const supportedIcons = ['pdf', 'doc', 'docx', 'txt', 'md', 'jpg', 'jpeg', 'png', 'gif'];
-    return supportedIcons.includes(ext.toLowerCase()) ? ext : 'dflt';
-  }
-
-  return 'dflt';
-}
 
 watch(
   () => props.fileName,
@@ -134,20 +136,25 @@ function closePreview() {
 </script>
 
 <template>
-  <div class="file-preview-container">
+  <div class="file-preview-container" :class="{ 'file-preview-container--modal': inModal }">
     <div class="preview-header">
-      <div class="flex items-center gap-2">
-        <SvgIcon :local-icon="getFileIcon(fileName)" class="text-16" />
-        <span class="font-medium">{{ fileName }}</span>
+      <div class="flex min-w-0 items-center gap-2">
+        <SvgIcon
+          v-if="fileIcon.localIcon"
+          :local-icon="fileIcon.localIcon"
+          class="shrink-0 text-20px"
+        />
+        <SvgIcon v-else :icon="fileIcon.icon" class="shrink-0 text-20px" />
+        <span class="truncate font-medium">{{ fileName }}</span>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex shrink-0 items-center gap-2">
         <NButton size="small" :loading="downloading" @click="downloadFile">
           <template #icon>
             <icon-mdi-download />
           </template>
           下载
         </NButton>
-        <NButton size="small" @click="closePreview">
+        <NButton v-if="!inModal" size="small" @click="closePreview">
           <template #icon>
             <icon-mdi-close />
           </template>
@@ -178,10 +185,17 @@ function closePreview() {
 
 <style scoped lang="scss">
 .file-preview-container {
-  @apply flex h-full flex-col;
+  @apply flex flex-col;
+  min-height: 360px;
+  max-height: min(70vh, 640px);
   background: rgb(var(--container-bg-color));
   border-left: 1px solid rgb(var(--primary-color) / 0.08);
   color: rgb(var(--base-text-color));
+
+  &--modal {
+    border-left: none;
+    min-height: 400px;
+  }
 
   .preview-header {
     @apply flex items-center justify-between p-4;

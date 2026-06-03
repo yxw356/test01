@@ -66,7 +66,8 @@ public class RrfFusionService {
             doc.setRrfScore(entry.totalRrfScore);
             doc.setRrfRank(rrfRank);
             doc.setRetrievalSources(new ArrayList<>(entry.sources));
-            doc.setScore(entry.totalRrfScore); // 用 RRF 分数替代原始分数用于后续排序
+            // 保留各路召回中的最高原始相关性分数，供 Cross-Encoder stub 精排使用
+            doc.setScore(entry.bestOriginalScore);
             fusedDocs.add(doc);
         }
 

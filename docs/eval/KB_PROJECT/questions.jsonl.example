@@ -1,0 +1,2 @@
+{"id":"PROJECT-001","question":"（示例）某项目里程碑交付物清单","kb_id":"KB_PROJECT","type":"answerable","expected_doc":"交付清单","must_cite":true}
+{"id":"PROJECT-002","question":"（示例）库外无关问题","kb_id":"KB_PROJECT","type":"unanswerable"}

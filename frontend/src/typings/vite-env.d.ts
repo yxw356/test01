@@ -112,6 +112,8 @@ declare namespace Env {
     readonly VITE_DEVTOOLS_LAUNCH_EDITOR?: import('vite-plugin-vue-devtools').VitePluginVueDevToolsOptions['launchEditor'];
     /** The timeout of the websocket */
     readonly VITE_WS_TIMEOUT: number;
+    /** Show login quick-demo buttons and prefill (Y/N) */
+    readonly VITE_LOGIN_QUICK_DEMO?: CommonType.YesOrNo;
   }
 }
 

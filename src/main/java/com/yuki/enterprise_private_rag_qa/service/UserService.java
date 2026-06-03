@@ -29,6 +29,7 @@ import java.util.stream.Collectors;
 import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.regex.Pattern;
 
 /**
  * UserService 类用于处理用户注册和认证相关的业务逻辑。
@@ -235,6 +236,37 @@ public class UserService {
         }
         // 认证成功，返回用户的用户名
         return user.getUsername();
+    }
+
+    private static final Pattern PASSWORD_PATTERN = Pattern.compile("^[A-Za-z0-9]{6,18}$");
+
+    /**
+     * 修改当前用户登录密码。
+     */
+    @Transactional
+    public void changePassword(String username, String oldPassword, String newPassword) {
+        if (oldPassword == null || oldPassword.isEmpty()) {
+            throw new CustomException("Current password cannot be empty", HttpStatus.BAD_REQUEST);
+        }
+        if (newPassword == null || newPassword.isEmpty()) {
+            throw new CustomException("New password cannot be empty", HttpStatus.BAD_REQUEST);
+        }
+        if (!PASSWORD_PATTERN.matcher(newPassword).matches()) {
+            throw new CustomException("Password must be 6-18 alphanumeric characters", HttpStatus.BAD_REQUEST);
+        }
+        if (oldPassword.equals(newPassword)) {
+            throw new CustomException("New password must differ from current password", HttpStatus.BAD_REQUEST);
+        }
+
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
+        if (!PasswordUtil.matches(oldPassword, user.getPassword())) {
+            throw new CustomException("Current password is incorrect", HttpStatus.UNAUTHORIZED);
+        }
+
+        user.setPassword(PasswordUtil.encode(newPassword));
+        userRepository.save(user);
+        logger.info("Password changed for user: {}", username);
     }
     
     /**

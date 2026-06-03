@@ -116,6 +116,9 @@ public class IntentDetector {
         if (containsAny(normalizedQuery, List.of("在哪里", "哪个文件", "哪一节", "位置", "路径", "定义在"))) {
             return "查找定位";
         }
+        if (containsAny(normalizedQuery, List.of("面积", "占地", "多大", "多少", "几个", "几座", "数量", "规模", "总投资", "产值", "营收", "产量", "人数"))) {
+            return "查找定位";
+        }
         if (containsAny(normalizedQuery, List.of("总结", "概括", "整理", "归纳", "汇总"))) {
             return "总结归纳";
         }

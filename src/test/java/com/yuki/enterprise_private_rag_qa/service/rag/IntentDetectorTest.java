@@ -65,6 +65,8 @@ class IntentDetectorTest {
     @Test
     void shouldDetectLocatePosition() {
         assertEquals("查找定位", detector.detect("这个函数在哪里定义"));
+        assertEquals("查找定位", detector.detect("基地占地面积"));
+        assertEquals("查找定位", detector.detect("公司面积是多少"));
     }
 
     @Test

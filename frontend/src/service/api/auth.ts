@@ -37,6 +37,15 @@ export function fetchGetUserInfo() {
   return request<Api.Auth.UserInfo>({ url: '/users/me' });
 }
 
+/** Change password for current user */
+export function fetchChangePassword(oldPassword: string, newPassword: string) {
+  return request({
+    url: '/users/password',
+    method: 'put',
+    data: { oldPassword, newPassword }
+  });
+}
+
 /**
  * Refresh token
  *

@@ -1,3 +1,4 @@
+import { computed } from 'vue';
 import { useWebSocket } from '@vueuse/core';
 
 export const useChatStore = defineStore(SetupStoreId.Chat, () => {
@@ -6,7 +7,12 @@ export const useChatStore = defineStore(SetupStoreId.Chat, () => {
 
   const list = ref<Api.Chat.Message[]>([]);
 
-  const store = useAuthStore();
+  const authStore = useAuthStore();
+
+  const wsUrl = computed(() => {
+    const token = authStore.token?.trim();
+    return token ? `/proxy-ws/chat/${encodeURIComponent(token)}` : '';
+  });
 
   const {
     status: wsStatus,
@@ -14,11 +20,29 @@ export const useChatStore = defineStore(SetupStoreId.Chat, () => {
     send: wsSend,
     open: wsOpen,
     close: wsClose
-  } = useWebSocket(`/proxy-ws/chat/${store.token}`, {
-    autoReconnect: true
+  } = useWebSocket(wsUrl, {
+    autoReconnect: true,
+    immediate: computed(() => Boolean(authStore.token?.trim()))
   });
 
+  function isActiveChat() {
+    return list.value.some(m => m.status === 'pending' || m.status === 'loading');
+  }
+
   const scrollToBottom = ref<null | (() => void)>(null);
+
+  const previewVisible = ref(false);
+  const previewFileName = ref('');
+
+  function openFilePreview(fileName: string) {
+    previewFileName.value = fileName;
+    previewVisible.value = true;
+  }
+
+  function closeFilePreview() {
+    previewVisible.value = false;
+    previewFileName.value = '';
+  }
 
   return {
     input,
@@ -29,6 +53,11 @@ export const useChatStore = defineStore(SetupStoreId.Chat, () => {
     wsSend,
     wsOpen,
     wsClose,
-    scrollToBottom
+    scrollToBottom,
+    previewVisible,
+    previewFileName,
+    openFilePreview,
+    closeFilePreview,
+    isActiveChat
   };
 });

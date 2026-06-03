@@ -3,7 +3,6 @@ package com.yuki.enterprise_private_rag_qa.model;
 import jakarta.persistence.*;
 import lombok.Data;
 import org.hibernate.annotations.CreationTimestamp;
-import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.LocalDateTime;
 
@@ -85,10 +84,15 @@ public class FileUpload {
     private LocalDateTime createdAt;
 
     /**
-     * 文件合并完成的时间
-     * 当文件上传状态为已完成时，自动记录完成的时间
+     * 文件合并完成的时间（仅在 merge 成功时写入，勿使用 @UpdateTimestamp）
      */
-    @UpdateTimestamp
     private LocalDateTime mergedAt;
-}
 
+    /** 对外展示的上传状态：已合并或已进入索引流程则视为上传完成 */
+    public int getEffectiveUploadStatus() {
+        if (status == 1 || mergedAt != null || indexStatus >= FileIndexStatus.PENDING) {
+            return 1;
+        }
+        return status;
+    }
+}

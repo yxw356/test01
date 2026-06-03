@@ -161,25 +161,28 @@ public class DocumentController {
     @GetMapping("/accessible")
     public ResponseEntity<?> getAccessibleFiles(
             @RequestAttribute("userId") String userId,
-            @RequestAttribute("orgTags") String orgTags) {
+            @RequestAttribute("orgTags") String orgTags,
+            @RequestParam(value = "orgTag", required = false) String orgTagFilter) {
         
         LogUtils.PerformanceMonitor monitor = LogUtils.startPerformanceMonitor("GET_ACCESSIBLE_FILES");
         try {
-            LogUtils.logBusiness("GET_ACCESSIBLE_FILES", userId, "接收到获取可访问文件请求: orgTags=%s", orgTags);
+            LogUtils.logBusiness("GET_ACCESSIBLE_FILES", userId,
+                    "接收到获取可访问文件请求: orgTags=%s, orgTagFilter=%s", orgTags, orgTagFilter);
             
-            List<FileUpload> files = documentService.getAccessibleFiles(userId, orgTags);
+            List<FileUpload> files = documentService.getAccessibleFiles(userId, orgTags, orgTagFilter);
             List<Map<String, Object>> fileData = files.stream().map(file -> {
                 Map<String, Object> dto = new HashMap<>();
                 dto.put("fileMd5", file.getFileMd5());
                 dto.put("fileName", file.getFileName());
                 dto.put("totalSize", file.getTotalSize());
-                dto.put("status", file.getStatus());
+                dto.put("status", file.getEffectiveUploadStatus());
                 dto.put("indexStatus", file.getIndexStatus());
                 dto.put("indexError", file.getIndexError());
                 dto.put("userId", file.getUserId());
                 dto.put("public", file.isPublic());
                 dto.put("createdAt", file.getCreatedAt());
                 dto.put("mergedAt", file.getMergedAt());
+                dto.put("orgTag", file.getOrgTag());
                 String orgTagName = getOrgTagName(file.getOrgTag());
                 dto.put("orgTagName", orgTagName);
                 return dto;
@@ -226,7 +229,7 @@ public class DocumentController {
                 dto.put("fileMd5", file.getFileMd5());
                 dto.put("fileName", file.getFileName());
                 dto.put("totalSize", file.getTotalSize());
-                dto.put("status", file.getStatus());
+                dto.put("status", file.getEffectiveUploadStatus());
                 dto.put("indexStatus", file.getIndexStatus());
                 dto.put("indexError", file.getIndexError());
                 dto.put("userId", file.getUserId());

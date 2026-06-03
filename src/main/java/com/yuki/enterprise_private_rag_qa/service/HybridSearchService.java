@@ -589,6 +589,11 @@ public class HybridSearchService {
         }
     }
 
+    /** 为检索结果补充原始文件名（RAG 链路在 HybridSearch 之外也需要调用） */
+    public void enrichWithFileNames(List<SearchResult> results) {
+        attachFileNames(results);
+    }
+
     private void attachFileNames(List<SearchResult> results) {
         if (results == null || results.isEmpty()) {
             return;

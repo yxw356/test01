@@ -125,7 +125,14 @@ public class DocumentService {
      * @return 用户可访问的文件列表
      */
     public List<FileUpload> getAccessibleFiles(String userId, String orgTags) {
-        logger.info("获取用户可访问文件列表: userId={}", userId);
+        return getAccessibleFiles(userId, orgTags, null);
+    }
+
+    /**
+     * @param orgTagFilter 可选，仅返回该组织标签下的文件（须在用户有效标签范围内）
+     */
+    public List<FileUpload> getAccessibleFiles(String userId, String orgTags, String orgTagFilter) {
+        logger.info("获取用户可访问文件列表: userId={}, orgTagFilter={}", userId, orgTagFilter);
         
         try {
             User user;
@@ -150,6 +157,17 @@ public class DocumentService {
                 logger.debug("使用有效组织标签查询文件");
             }
             
+            if (orgTagFilter != null && !orgTagFilter.isBlank()) {
+                String tag = orgTagFilter.trim();
+                if (!userEffectiveTags.isEmpty() && !userEffectiveTags.contains(tag)) {
+                    logger.warn("用户无权按标签筛选: userId={}, filter={}", userId, tag);
+                    return List.of();
+                }
+                files = files.stream()
+                        .filter(f -> tag.equals(f.getOrgTag()))
+                        .collect(Collectors.toList());
+            }
+
             logger.info("成功获取用户可访问文件列表: userId={}, fileCount={}", userId, files.size());
             return files;
         } catch (Exception e) {

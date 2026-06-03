@@ -12,5 +12,6 @@ public enum AuditAction {
     CHAT,
     INDEX_SUCCESS,
     INDEX_FAILURE,
-    LOGIN
+    LOGIN,
+    PASSWORD_CHANGE
 }

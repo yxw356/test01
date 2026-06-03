@@ -3,7 +3,6 @@
 import { nextTick } from 'vue';
 import { VueMarkdownIt } from 'vue-markdown-shiki';
 import { formatDate } from '@/utils/common';
-import FilePreview from '@/components/custom/file-preview.vue';
 defineOptions({ name: 'ChatMessage' });
 
 const props = defineProps<{ msg: Api.Chat.Message }>();
@@ -16,9 +15,6 @@ function handleCopy(content: string) {
 }
 
 const chatStore = useChatStore();
-
-const previewVisible = ref(false);
-const previewFileName = ref('');
 
 // 存储文件名和对应的事件处理
 const sourceFiles = ref<Array<{fileName: string, id: string}>>([]);
@@ -76,10 +72,8 @@ function handleContentClick(event: MouseEvent) {
   }
 }
 
-// 处理来源文件点击事件
 function openFilePreview(fileName: string) {
-  previewFileName.value = decodeURIComponent(fileName);
-  previewVisible.value = true;
+  chatStore.openFilePreview(decodeURIComponent(fileName));
 }
 
 async function handleSourceFileClick(fileName: string) {
@@ -143,7 +137,6 @@ async function handleSourceFileClick(fileName: string) {
         </template>
       </NButton>
     </div>
-    <FilePreview v-model:visible="previewVisible" :file-name="previewFileName" />
   </div>
 </template>
 
