@@ -22,13 +22,58 @@ function createDefaultModel(): Api.KnowledgeBase.SearchParams {
 const list = ref<Api.KnowledgeBase.SearchResult[]>([]);
 
 const patterns = ref<string[]>([]);
-function highlight(text: string) {
-  if (!model.value.query) return false;
-  if (text.includes(model.value.query)) return true;
-  return false;
+const hasSearched = ref(false);
+
+const sortedList = computed(() => {
+  return [...list.value].sort((a, b) => diagnosticScore(b) - diagnosticScore(a));
+});
+
+const topHit = computed(() => sortedList.value[0]);
+const hitFileCount = computed(() => new Set(list.value.map(item => item.fileMd5).filter(Boolean)).size);
+
+function highlight(text?: string | null) {
+  if (!text || !model.value.query) return false;
+  return text.includes(model.value.query);
+}
+
+function displaySnippet(item: Api.KnowledgeBase.SearchResult) {
+  return item.parentTextContent || item.textContent || '';
+}
+
+function diagnosticScore(item: Api.KnowledgeBase.SearchResult) {
+  return item.finalRank ? 100000 - item.finalRank : item.crossScore || item.rrfScore || item.score || 0;
+}
+
+function formatScore(value?: number | null) {
+  if (value === undefined || value === null) return '-';
+  if (Math.abs(value) >= 100) return value.toFixed(1);
+  return value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function scopeLabel(item: Api.KnowledgeBase.SearchResult) {
+  const scope = item.knowledgeScope || (item.isPublic ? 'PUBLIC' : 'DEPARTMENT');
+  if (scope === 'PUBLIC') return '公共知识';
+  if (scope === 'PRIVATE') return '私人知识';
+  return '部门知识';
+}
+
+function scopeType(item: Api.KnowledgeBase.SearchResult) {
+  const scope = item.knowledgeScope || (item.isPublic ? 'PUBLIC' : 'DEPARTMENT');
+  if (scope === 'PUBLIC') return 'success';
+  if (scope === 'PRIVATE') return 'warning';
+  return 'info';
+}
+
+function routeTags(item: Api.KnowledgeBase.SearchResult) {
+  const sources = item.retrievalSources?.length ? item.retrievalSources : item.retrievalSource ? [item.retrievalSource] : [];
+  return sources.slice(0, 4);
 }
 
 async function search() {
+  if (!model.value.query.trim()) {
+    window.$message?.warning('请输入检索问题或关键词');
+    return;
+  }
   loading.value = true;
   const { error, data } = await request<Api.KnowledgeBase.SearchResult[]>({
     url: '/search/hybrid',
@@ -38,6 +83,7 @@ async function search() {
   if (!error) {
     list.value = data;
     patterns.value = [model.value.query];
+    hasSearched.value = true;
   }
   loading.value = false;
 }
@@ -46,6 +92,7 @@ function reset() {
   model.value = createDefaultModel();
   patterns.value = [];
   list.value = [];
+  hasSearched.value = false;
   restoreValidation();
 }
 watch(visible, () => {
@@ -106,10 +153,28 @@ watch(visible, () => {
       </NGrid>
     </NForm>
     <NSpin :show="loading">
-      <NEmpty v-if="list.length === 0" description="暂无数据" class="py-100px" />
-      <NScrollbar v-else class="max-h-500px">
+      <NEmpty v-if="list.length === 0" :description="hasSearched ? '没有命中可用片段' : '输入问题后查看检索链路'" class="py-100px" />
+      <div v-else class="diagnostic-summary">
+        <div>
+          <span>命中片段</span>
+          <strong>{{ list.length }}</strong>
+        </div>
+        <div>
+          <span>命中文件</span>
+          <strong>{{ hitFileCount }}</strong>
+        </div>
+        <div>
+          <span>最高分</span>
+          <strong>{{ formatScore(topHit?.score) }}</strong>
+        </div>
+        <div>
+          <span>最高命中</span>
+          <strong>{{ topHit?.fileName || '-' }}</strong>
+        </div>
+      </div>
+      <NScrollbar v-if="list.length" class="max-h-540px">
         <NCard
-          v-for="(item, index) in list"
+          v-for="(item, index) in sortedList"
           :key="index"
           :bordered="false"
           class="search-result-card my-8"
@@ -118,24 +183,55 @@ watch(visible, () => {
             footer: 'soft'
           }"
         >
-          <div class="relative">
+          <div class="result-head">
+            <div class="result-title">
+              <NTag size="small" type="primary" :bordered="false">#{{ index + 1 }}</NTag>
+              <strong>{{ item.fileName || '未命名文件' }}</strong>
+            </div>
+            <div class="result-tags">
+              <NTag size="small" :type="scopeType(item)" :bordered="false">{{ scopeLabel(item) }}</NTag>
+              <NTag v-if="item.departmentId || item.orgTag" size="small" :bordered="false">
+                {{ item.departmentId || item.orgTag }}
+              </NTag>
+              <NTag v-for="source in routeTags(item)" :key="source" size="small" :bordered="false">
+                {{ source }}
+              </NTag>
+            </div>
+          </div>
+          <div class="score-grid">
+            <div>
+              <span>原始分</span>
+              <strong>{{ formatScore(item.score) }}</strong>
+            </div>
+            <div>
+              <span>RRF</span>
+              <strong>{{ formatScore(item.rrfScore) }}</strong>
+            </div>
+            <div>
+              <span>精排</span>
+              <strong>{{ formatScore(item.crossScore) }}</strong>
+            </div>
+            <div>
+              <span>最终排名</span>
+              <strong>{{ item.finalRank || item.crossRank || item.rrfRank || '-' }}</strong>
+            </div>
+          </div>
+          <div class="snippet-box">
             <NHighlight
-              v-if="highlight(item.textContent)"
+              v-if="highlight(displaySnippet(item))"
               highlight-class="bg-[rgb(var(--primary-400-color))] color-white px-2 mx-1 rd-sm"
-              :text="item.textContent"
+              :text="displaySnippet(item)"
               :patterns="patterns"
             />
-            <span v-else>{{ item.textContent }}</span>
-            <NTag
-              :bordered="false"
-              draggable
-              class="score-tag absolute right-0 top-0 color-white"
-            >
-              Score: {{ item.score }}
-            </NTag>
+            <span v-else>{{ displaySnippet(item) }}</span>
           </div>
           <template #footer>
-            <span>来源：{{ item.fileName }}</span>
+            <div class="result-footer">
+              <span>文件MD5：{{ item.fileMd5 }}</span>
+              <span>chunk：{{ item.chunkId ?? '-' }}</span>
+              <span v-if="item.parentId">parent：{{ item.parentId }}</span>
+              <span v-if="item.queryUsed">query：{{ item.queryUsed }}</span>
+            </div>
           </template>
         </NCard>
       </NScrollbar>
@@ -150,11 +246,115 @@ watch(visible, () => {
   background: rgb(var(--container-bg-color));
 }
 
-.score-tag {
-  background: rgb(var(--primary-color) / 0.9);
+.diagnostic-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.diagnostic-summary > div {
+  min-width: 0;
+  border: 1px solid rgb(15 23 42 / 0.08);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgb(var(--base-color));
+}
+
+.diagnostic-summary span,
+.score-grid span {
+  display: block;
+  color: rgb(var(--base-text-color) / 0.58);
+  font-size: 12px;
+}
+
+.diagnostic-summary strong,
+.score-grid strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 4px;
+  font-size: 16px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.result-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.result-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.score-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.score-grid > div {
+  border-radius: 8px;
+  background: rgb(var(--base-color));
+  padding: 8px 10px;
+}
+
+.snippet-box {
+  max-height: 180px;
+  overflow: auto;
+  border-radius: 8px;
+  background: rgb(var(--base-color));
+  padding: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.result-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: rgb(var(--base-text-color) / 0.62);
+  font-size: 12px;
 }
 
 html.dark .search-result-card {
   border-color: rgb(255 255 255 / 0.08);
+}
+
+@media (max-width: 768px) {
+  .diagnostic-summary,
+  .score-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .result-head {
+    display: block;
+  }
+
+  .result-tags {
+    justify-content: flex-start;
+    margin-top: 8px;
+  }
 }
 </style>

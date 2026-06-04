@@ -16,4 +16,5 @@ export const chunkSize = 5 * 1024 * 1024;
 
 export const defaultMaxUploadFileSize = 200 * 1024 * 1024;
 
-export const uploadAccept = '.pdf,.doc,.docx,.txt';
+export const uploadAccept =
+  '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.rtf,.md,.odt,.ods,.odp,.html,.htm,.xml,.json,.csv,.epub,.pages,.numbers,.keynote';

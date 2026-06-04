@@ -225,6 +225,39 @@ public class AdminController {
                     .body(Map.of("code", 500, "message", "创建管理员用户失败: " + e.getMessage()));
         }
     }
+
+    @PostMapping("/users")
+    public ResponseEntity<?> createManagedUser(
+            @RequestHeader("Authorization") String token,
+            @RequestBody ManagedUserRequest request) {
+
+        String operatorUsername = jwtUtils.extractUsernameFromToken(token.replace("Bearer ", ""));
+        validateUserManager(operatorUsername);
+
+        try {
+            User created = userService.createManagedUser(operatorUsername, new UserService.ManagedUserRequest(
+                    request.username(),
+                    request.password(),
+                    request.role(),
+                    request.orgTags() == null ? List.of() : request.orgTags(),
+                    request.primaryOrg()
+            ));
+            Map<String, Object> data = new HashMap<>();
+            data.put("userId", created.getId());
+            data.put("username", created.getUsername());
+            data.put("role", created.getRole().name());
+            data.put("orgTags", created.getOrgTags());
+            data.put("primaryOrg", created.getPrimaryOrg());
+            return ResponseEntity.ok(Map.of("code", 200, "message", "账号创建成功", "data", data));
+        } catch (CustomException e) {
+            LogUtils.logBusinessError("ADMIN_CREATE_MANAGED_USER", operatorUsername, "创建账号失败: %s", e, e.getMessage());
+            return ResponseEntity.status(e.getStatus()).body(Map.of("code", e.getStatus().value(), "message", e.getMessage()));
+        } catch (Exception e) {
+            LogUtils.logBusinessError("ADMIN_CREATE_MANAGED_USER", operatorUsername, "创建账号异常: %s", e, e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("code", 500, "message", "创建账号失败: " + e.getMessage()));
+        }
+    }
     
     /**
      * 创建组织标签
@@ -422,10 +455,10 @@ public class AdminController {
             @RequestParam(defaultValue = "20") int size) {
         
         String adminUsername = jwtUtils.extractUsernameFromToken(token.replace("Bearer ", ""));
-        validateAdmin(adminUsername);
+        validateUserManager(adminUsername);
         
         try {
-            Map<String, Object> usersData = userService.getUserList(keyword, orgTag, role, status, page, size);
+            Map<String, Object> usersData = userService.getUserList(adminUsername, keyword, orgTag, role, status, page, size);
             return ResponseEntity.ok(Map.of(
                 "code", 200, 
                 "message", "获取用户列表成功", 
@@ -621,12 +654,35 @@ public class AdminController {
         
         return admin;
     }
+
+    private User validateUserManager(String username) {
+        if (username == null || username.isEmpty()) {
+            throw new CustomException("Invalid token", HttpStatus.UNAUTHORIZED);
+        }
+
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
+
+        if (!user.isSuperAdmin() && !user.isDepartmentLead()) {
+            throw new CustomException("Unauthorized access: user management role required", HttpStatus.FORBIDDEN);
+        }
+
+        return user;
+    }
 }
 
 /**
  * 管理员用户请求体
  */
 record AdminUserRequest(String username, String password) {}
+
+record ManagedUserRequest(
+        String username,
+        String password,
+        User.Role role,
+        List<String> orgTags,
+        String primaryOrg
+) {}
 
 /**
  * 组织标签请求体

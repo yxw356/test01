@@ -19,6 +19,7 @@ const chatStore = useChatStore();
 
 const previewVisible = ref(false);
 const previewFileName = ref('');
+const citationsExpanded = ref(false);
 
 // 存储文件名和对应的事件处理
 const sourceFiles = ref<Array<{fileName: string, id: string}>>([]);
@@ -60,6 +61,11 @@ const content = computed(() => {
   return rawContent;
 });
 
+const visibleCitations = computed(() => {
+  if (!props.msg.citations?.length) return [];
+  return citationsExpanded.value ? props.msg.citations.slice(0, 5) : [];
+});
+
 // 处理内容点击事件（事件委托）
 function handleContentClick(event: MouseEvent) {
   const target = event.target as HTMLElement;
@@ -96,7 +102,7 @@ async function handleSourceFileClick(fileName: string) {
 
       <div :class="['message-body', msg.role === 'user' ? 'message-body-user' : 'message-body-assistant']">
         <div class="message-meta">
-          <NText class="text-4 font-bold">{{ msg.role === 'user' ? authStore.userInfo.username : '知识库助手' }}</NText>
+          <NText class="text-4 font-bold">{{ msg.role === 'user' ? authStore.userInfo.username : '龙汇QA' }}</NText>
           <NText class="text-3 color-gray-500">{{ formatDate(msg.timestamp) }}</NText>
         </div>
 
@@ -109,9 +115,15 @@ async function handleSourceFileClick(fileName: string) {
             <VueMarkdownIt :content="content" />
           </div>
           <div v-if="msg.citations?.length" class="citations-panel mt-3">
-            <NText depth="3" class="mb-2 block text-13px">参考来源（{{ msg.citations.length }}）</NText>
+            <NButton size="small" quaternary class="citations-toggle" @click.stop="citationsExpanded = !citationsExpanded">
+              <template #icon>
+                <icon-mdi-chevron-down v-if="citationsExpanded" />
+                <icon-mdi-chevron-right v-else />
+              </template>
+              参考来源（{{ msg.citations.length }}）
+            </NButton>
             <div
-              v-for="citation in msg.citations"
+              v-for="citation in visibleCitations"
               :key="citation.index"
               class="citation-item"
               @click.stop="citation.fileName && openFilePreview(citation.fileName)"
@@ -125,6 +137,9 @@ async function handleSourceFileClick(fileName: string) {
               </div>
               <p v-if="citation.snippet" class="citation-snippet">{{ citation.snippet }}</p>
             </div>
+            <NText v-if="citationsExpanded && msg.citations.length > visibleCitations.length" depth="3" class="text-12px">
+              已收起其余 {{ msg.citations.length - visibleCitations.length }} 条来源
+            </NText>
           </div>
         </div>
         <div v-else-if="msg.role === 'user'" class="user-message-card text-4">{{ content }}</div>
@@ -323,7 +338,14 @@ async function handleSourceFileClick(fileName: string) {
 }
 
 .citations-panel {
+  display: grid;
+  gap: 8px;
   max-width: min(100%, 60rem);
+}
+
+.citations-toggle {
+  justify-self: start;
+  padding-left: 0;
 }
 
 .citation-item {
@@ -331,7 +353,6 @@ async function handleSourceFileClick(fileName: string) {
   border-radius: 8px;
   background: rgb(var(--container-bg-color));
   padding: 10px 12px;
-  margin-bottom: 8px;
   cursor: pointer;
   transition: border-color 0.2s;
 

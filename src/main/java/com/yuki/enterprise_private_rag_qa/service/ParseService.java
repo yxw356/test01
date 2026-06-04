@@ -271,13 +271,35 @@ public class ParseService {
     }
 
     private void recordCleaningResult(String fileMd5, DataCleaningService.CleaningResult result) {
+        DataCleaningService.CleaningQualityReport qualityReport = assessCleaningQuality(result);
         updateCleaningMetadata(fileMd5, upload -> {
             upload.setCleaningStatus(FileUpload.CleaningStatus.CLEANED);
             upload.setOriginalChars(result.originalChars());
             upload.setCleanedChars(result.cleanedChars());
             upload.setRemovedChars(result.removedChars());
             upload.setDuplicateLinesRemoved(result.duplicateLinesRemoved());
+            upload.setCleaningQualityStatus(toFileCleaningQualityStatus(qualityReport.status()));
+            upload.setCleaningQualityIssues(String.join(",", qualityReport.issues()));
+            upload.setCleaningQualityScore(qualityReport.score());
         });
+    }
+
+    private DataCleaningService.CleaningQualityReport assessCleaningQuality(DataCleaningService.CleaningResult result) {
+        if (dataCleaningService == null) {
+            return new DataCleaningService.CleaningQualityReport(
+                    DataCleaningService.CleaningQualityStatus.OK,
+                    List.of(),
+                    1.0d
+            );
+        }
+        return dataCleaningService.assessQuality(result);
+    }
+
+    private FileUpload.CleaningQualityStatus toFileCleaningQualityStatus(DataCleaningService.CleaningQualityStatus status) {
+        if (status == null) {
+            return FileUpload.CleaningQualityStatus.OK;
+        }
+        return FileUpload.CleaningQualityStatus.valueOf(status.name());
     }
 
     private void updateCleaningMetadata(String fileMd5, java.util.function.Consumer<FileUpload> updater) {

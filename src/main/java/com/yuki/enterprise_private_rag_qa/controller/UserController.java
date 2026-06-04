@@ -43,29 +43,9 @@ public class UserController {
     // 接收用户请求体中的用户名和密码，并调用用户服务进行注册
     @PostMapping("/register")
     public ResponseEntity<?> register(@RequestBody UserRequest request) {
-        LogUtils.PerformanceMonitor monitor = LogUtils.startPerformanceMonitor("USER_REGISTER");
-        try {
-            if (request.username() == null || request.username().isEmpty() ||
-                    request.password() == null || request.password().isEmpty()) {
-                LogUtils.logUserOperation("anonymous", "REGISTER", "validation", "FAILED_EMPTY_PARAMS");
-                monitor.end("注册失败：参数为空");
-                return ResponseEntity.badRequest().body(Map.of("code", 400, "message", "Username and password cannot be empty"));
-            }
-            
-            userService.registerUser(request.username(), request.password());
-            LogUtils.logUserOperation(request.username(), "REGISTER", "user_creation", "SUCCESS");
-            monitor.end("注册成功");
-            
-            return ResponseEntity.ok(Map.of("code", 200, "message", "User registered successfully"));
-        } catch (CustomException e) {
-            LogUtils.logBusinessError("USER_REGISTER", request.username(), "用户注册失败: %s", e, e.getMessage());
-            monitor.end("注册失败: " + e.getMessage());
-            return ResponseEntity.status(e.getStatus()).body(Map.of("code", e.getStatus().value(), "message", e.getMessage()));
-        } catch (Exception e) {
-            LogUtils.logBusinessError("USER_REGISTER", request.username(), "用户注册异常: %s", e, e.getMessage());
-            monitor.end("注册异常: " + e.getMessage());
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("code", 500, "message", "Internal server error"));
-        }
+        LogUtils.logUserOperation("anonymous", "REGISTER", "public_register", "DISABLED");
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(Map.of("code", 403, "message", "外部注册已关闭，请联系管理员创建账号"));
     }
 
     // 用户登录接口
@@ -234,6 +214,21 @@ public class UserController {
         }
     }
 
+    @PutMapping("/password")
+    public ResponseEntity<?> changePassword(@RequestAttribute("userId") String userId,
+                                            @RequestBody ChangePasswordRequest request) {
+        try {
+            User user = userRepository.findById(Long.parseLong(userId))
+                    .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
+            userService.changeOwnPassword(user.getUsername(), request.currentPassword(), request.newPassword());
+            return ResponseEntity.ok(Map.of("code", 200, "message", "密码修改成功"));
+        } catch (CustomException e) {
+            return ResponseEntity.status(e.getStatus()).body(Map.of("code", e.getStatus().value(), "message", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("code", 500, "message", "密码修改失败"));
+        }
+    }
+
     // 获取当前用户组织标签信息 (供上传文件时使用)
     @GetMapping("/upload-orgs")
     public ResponseEntity<?> getUploadOrgTags(@RequestAttribute("userId") String userId) {
@@ -345,3 +340,5 @@ record UserRequest(String username, String password) {}
 
 // 主组织标签请求记录类
 record PrimaryOrgRequest(String primaryOrg) {}
+
+record ChangePasswordRequest(String currentPassword, String newPassword) {}

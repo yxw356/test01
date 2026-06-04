@@ -2,8 +2,10 @@
 import { NButton, NTag } from 'naive-ui';
 import UserSearch from './modules/user-search.vue';
 import OrgTagSettingDialog from './modules/org-tag-setting-dialog.vue';
+import UserCreateDialog from './modules/user-create-dialog.vue';
 
 const appStore = useAppStore();
+const authStore = useAuthStore();
 
 function apiFn(params: Api.User.SearchParams) {
   return request<Api.User.List>({ url: '/admin/users/list', params });
@@ -86,16 +88,20 @@ const { columns, columnChecks, data, getData, loading, mobilePagination, searchP
       key: 'operate',
       title: '操作',
       width: 110,
-      render: row => (
-        <NButton type="primary" ghost size="small" onClick={() => handlePermission(row)}>
-          权限设置
-        </NButton>
-      )
+      render: row =>
+        authStore.isSuperAdmin ? (
+          <NButton type="primary" ghost size="small" onClick={() => handlePermission(row)}>
+            权限设置
+          </NButton>
+        ) : (
+          <NTag bordered={false}>-</NTag>
+        )
     }
   ]
 });
 
 const visible = ref(false);
+const createVisible = ref(false);
 const editingData = ref<Api.User.Item | null>(null);
 function handlePermission(row: Api.User.Item) {
   editingData.value = row;
@@ -120,7 +126,13 @@ function handlePermission(row: Api.User.Item) {
     </Teleport>
     <NCard title="用户列表" :bordered="false" size="small" class="paper-card sm:flex-1-hidden card-wrapper">
       <template #header-extra>
-        <TableHeaderOperation v-model:columns="columnChecks" :addable="false" :loading="loading" @refresh="getData" />
+        <TableHeaderOperation
+          v-model:columns="columnChecks"
+          :addable="authStore.isSuperAdmin || authStore.isDeptLead"
+          :loading="loading"
+          @add="createVisible = true"
+          @refresh="getData"
+        />
       </template>
       <NDataTable
         :columns="columns"
@@ -136,6 +148,7 @@ function handlePermission(row: Api.User.Item) {
       />
     </NCard>
     <OrgTagSettingDialog v-model:visible="visible" :row-data="editingData!" @submitted="getData" />
+    <UserCreateDialog v-model:visible="createVisible" @submitted="getData" />
   </div>
 </template>
 

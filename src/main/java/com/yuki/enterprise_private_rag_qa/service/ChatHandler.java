@@ -45,6 +45,7 @@ public class ChatHandler {
     private final AuditService auditService;
     private final OperationMetricsService operationMetricsService;
     private final ConversationService conversationService;
+    private final ChatConcurrencyLimiter chatConcurrencyLimiter;
     private final boolean redisEnabled;
     private final boolean ragEnabled;
     
@@ -61,6 +62,7 @@ public class ChatHandler {
     // 停止标志 - 简单方案
     private final Map<String, Boolean> stopFlags = new ConcurrentHashMap<>();
     private final Map<String, Long> chatStartTimes = new ConcurrentHashMap<>();
+    private final Map<String, Boolean> chatPermitSessions = new ConcurrentHashMap<>();
 
     public ChatHandler(RedisTemplate<String, String> redisTemplate,
                       HybridSearchService searchService,
@@ -69,6 +71,7 @@ public class ChatHandler {
                       AuditService auditService,
                       OperationMetricsService operationMetricsService,
                       ConversationService conversationService,
+                      ChatConcurrencyLimiter chatConcurrencyLimiter,
                       @Value("${chat.redis.enabled:true}") boolean redisEnabled,
                       @Value("${rag.enabled:true}") boolean ragEnabled) {
         this.redisTemplate = redisTemplate;
@@ -78,6 +81,7 @@ public class ChatHandler {
         this.auditService = auditService;
         this.operationMetricsService = operationMetricsService;
         this.conversationService = conversationService;
+        this.chatConcurrencyLimiter = chatConcurrencyLimiter;
         this.redisEnabled = redisEnabled;
         this.ragEnabled = ragEnabled;
         this.objectMapper = new ObjectMapper();
@@ -89,6 +93,13 @@ public class ChatHandler {
         chatStartTimes.put(session.getId(), chatStart);
         auditService.recordSuccess(userId, userId, AuditAction.CHAT, "conversation",
                 session.getId(), AuditSupport.truncate(userMessage, 200), null, null);
+        if (!chatConcurrencyLimiter.tryAcquire()) {
+            chatStartTimes.remove(session.getId());
+            sendErrorMessage(session, "当前问答请求较多，请稍后再试。");
+            sendCompletionNotification(session, List.of());
+            return;
+        }
+        chatPermitSessions.put(session.getId(), true);
         try {
             String sessionId = session.getId();
             stopFlags.remove(sessionId);
@@ -143,6 +154,7 @@ public class ChatHandler {
                 error -> {
                     activeStreams.remove(sessionId);
                     activeResponses.remove(sessionId);
+                    releaseChatPermit(sessionId);
                     if (Boolean.TRUE.equals(stopFlags.get(sessionId))) {
                         logger.info("流式请求已被用户停止，忽略取消后的错误回调，会话ID: {}", sessionId);
                         responseBuilders.remove(sessionId);
@@ -164,6 +176,7 @@ public class ChatHandler {
             responseBuilders.remove(session.getId());
             activeResponses.remove(session.getId());
             cleanupActiveStream(session.getId());
+            releaseChatPermit(session.getId());
         }
     }
 
@@ -171,6 +184,7 @@ public class ChatHandler {
         String sessionId = session.getId();
         activeStreams.remove(sessionId);
         activeResponses.remove(sessionId);
+        releaseChatPermit(sessionId);
 
         if (Boolean.TRUE.equals(stopFlags.get(sessionId))) {
             logger.info("流式请求已被用户停止，忽略完成回调，会话ID: {}", sessionId);
@@ -413,8 +427,12 @@ public class ChatHandler {
 
     private void handleError(WebSocketSession session, Throwable error) {
         logger.error("AI服务错误: {}", error.getMessage(), error);
+        sendErrorMessage(session, "AI服务暂时不可用，请稍后重试");
+    }
+
+    private void sendErrorMessage(WebSocketSession session, String message) {
         try {
-            Map<String, String> errorResponse = Map.of("error", "AI服务暂时不可用，请稍后重试");
+            Map<String, String> errorResponse = Map.of("error", message);
             String errorJson = objectMapper.writeValueAsString(errorResponse);
             logger.error("发送错误消息到会话 {}: {}", session.getId(), errorJson);
             session.sendMessage(new TextMessage(errorJson));
@@ -441,6 +459,7 @@ public class ChatHandler {
         } else {
             logger.info("停止请求未找到正在进行的流式请求，会话ID: {}", sessionId);
         }
+        releaseChatPermit(sessionId);
 
         ActiveResponse activeResponse =         activeResponses.remove(sessionId);
         StringBuilder partialBuilder = responseBuilders.remove(sessionId);
@@ -487,5 +506,11 @@ public class ChatHandler {
     }
 
     private record ActiveResponse(String userId, String conversationId, String userMessage) {
+    }
+
+    private void releaseChatPermit(String sessionId) {
+        if (chatPermitSessions.remove(sessionId) != null) {
+            chatConcurrencyLimiter.release();
+        }
     }
 }

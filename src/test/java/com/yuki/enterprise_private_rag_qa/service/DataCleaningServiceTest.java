@@ -83,4 +83,36 @@ class DataCleaningServiceTest {
 
         assertEquals("企业制度正文\n内部资料", result.cleanedText());
     }
+
+    @Test
+    void assessQualityWarnsWhenCleaningRemovesTooMuchContent() {
+        DataCleaningService.CleaningResult result = new DataCleaningService.CleaningResult(
+                "有效正文",
+                1000,
+                80,
+                920,
+                0
+        );
+
+        DataCleaningService.CleaningQualityReport report = service.assessQuality(result);
+
+        assertEquals(DataCleaningService.CleaningQualityStatus.WARNING, report.status());
+        assertTrue(report.issues().contains("REMOVED_RATIO_HIGH"));
+    }
+
+    @Test
+    void assessQualityFailsWhenCleanedTextLooksGarbled() {
+        DataCleaningService.CleaningResult result = new DataCleaningService.CleaningResult(
+                "���制度���流程���",
+                60,
+                15,
+                45,
+                0
+        );
+
+        DataCleaningService.CleaningQualityReport report = service.assessQuality(result);
+
+        assertEquals(DataCleaningService.CleaningQualityStatus.FAILED, report.status());
+        assertTrue(report.issues().contains("GARBLED_TEXT"));
+    }
 }

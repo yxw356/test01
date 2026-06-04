@@ -33,6 +33,138 @@ def ok_response(payload: dict) -> bytes:
     return json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
 
+def tokenize(text: str) -> list[str]:
+    raw_terms = re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]+", text.lower())
+    terms: list[str] = []
+    for term in raw_terms:
+        if len(term) <= 1:
+            continue
+        terms.append(term)
+        if re.fullmatch(r"[\u4e00-\u9fff]+", term) and len(term) > 2:
+            terms.extend(term[index:index + 2] for index in range(len(term) - 1))
+    return terms
+
+
+def extract_text_query_terms(request: dict) -> list[str]:
+    queries: list[str] = []
+
+    def visit(node: object) -> None:
+        if isinstance(node, dict):
+            match = node.get("match")
+            if isinstance(match, dict) and "textContent" in match:
+                value = match["textContent"]
+                if isinstance(value, dict):
+                    query = value.get("query")
+                else:
+                    query = value
+                if query is not None:
+                    queries.append(str(query))
+            for value in node.values():
+                visit(value)
+        elif isinstance(node, list):
+            for item in node:
+                visit(item)
+
+    visit(request.get("query", {}))
+    terms: list[str] = []
+    for query in queries:
+        terms.extend(tokenize(query))
+    return dedupe(terms)
+
+
+def extract_filter(request: dict) -> object:
+    filters: list[object] = []
+
+    def visit(node: object) -> None:
+        if isinstance(node, dict):
+            bool_node = node.get("bool")
+            if isinstance(bool_node, dict) and "filter" in bool_node:
+                filter_value = bool_node["filter"]
+                if isinstance(filter_value, list):
+                    filters.extend(filter_value)
+                else:
+                    filters.append(filter_value)
+            knn_node = node.get("knn")
+            if isinstance(knn_node, dict) and "filter" in knn_node:
+                filters.append(knn_node["filter"])
+            for value in node.values():
+                visit(value)
+        elif isinstance(node, list):
+            for item in node:
+                visit(item)
+
+    visit(request)
+    if not filters:
+        return None
+    if len(filters) == 1:
+        return filters[0]
+    return {"bool": {"must": filters}}
+
+
+def matches_filter(doc: dict, filter_node: object) -> bool:
+    if not filter_node:
+        return True
+    if isinstance(filter_node, list):
+        return all(matches_filter(doc, item) for item in filter_node)
+    if not isinstance(filter_node, dict):
+        return True
+    if "term" in filter_node:
+        term = filter_node["term"]
+        if not isinstance(term, dict):
+            return True
+        for field, expected in term.items():
+            value = expected.get("value") if isinstance(expected, dict) else expected
+            return normalize_value(doc.get(field)) == normalize_value(value)
+    if "match_all" in filter_node:
+        return True
+    if "bool" in filter_node:
+        bool_node = filter_node["bool"]
+        must = bool_node.get("must", [])
+        should = bool_node.get("should", [])
+        filters = bool_node.get("filter", [])
+        if isinstance(must, dict):
+            must = [must]
+        if isinstance(should, dict):
+            should = [should]
+        if isinstance(filters, dict):
+            filters = [filters]
+        if not all(matches_filter(doc, item) for item in must):
+            return False
+        if not all(matches_filter(doc, item) for item in filters):
+            return False
+        min_should = int(bool_node.get("minimum_should_match") or (1 if should else 0))
+        should_matches = sum(1 for item in should if matches_filter(doc, item))
+        return should_matches >= min_should
+    return True
+
+
+def normalize_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value).lower()
+
+
+def score_doc(doc: dict, query_terms: list[str]) -> float:
+    text = " ".join(str(doc.get(field) or "") for field in ("textContent", "parentTextContent", "fileName")).lower()
+    if not query_terms:
+        return 1.0
+    score = 0.0
+    for term in query_terms:
+        if term in text:
+            score += 4.0 if len(term) > 2 else 1.0
+    return score
+
+
+def dedupe(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "LocalElasticsearch/8.10"
 
@@ -184,30 +316,37 @@ class Handler(BaseHTTPRequestHandler):
         request = self._read_json()
         size = int(request.get("size") or 10)
         docs = list(load_docs().values())
-        query_text = json.dumps(request.get("query", {}), ensure_ascii=False)
-        terms = [t.lower() for t in re.findall(r"[\w\u4e00-\u9fff]+", query_text) if len(t) > 1]
+        if request.get("knn") and not request.get("query"):
+            self._send(200, {
+                "took": 1,
+                "timed_out": False,
+                "_shards": {"total": 1, "successful": 1, "skipped": 0, "failed": 0},
+                "hits": {"total": {"value": 0, "relation": "eq"}, "max_score": None, "hits": []},
+            })
+            return
 
-        def score(doc: dict) -> float:
-            text = json.dumps(doc, ensure_ascii=False).lower()
-            matches = sum(1 for term in terms if term in text)
-            return 1.0 + matches
-
-        ranked = sorted(docs, key=score, reverse=True)[:size]
+        query_terms = extract_text_query_terms(request)
+        filter_node = extract_filter(request)
+        permitted_docs = [doc for doc in docs if matches_filter(doc, filter_node)]
+        scored = [(doc, score_doc(doc, query_terms)) for doc in permitted_docs]
+        if query_terms:
+            scored = [(doc, score) for doc, score in scored if score > 0]
+        ranked_pairs = sorted(scored, key=lambda item: item[1], reverse=True)[:size]
         hits = [
             {
                 "_index": INDEX_NAME,
                 "_id": str(doc.get("id") or i),
-                "_score": score(doc),
+                "_score": score,
                 "_source": {k: v for k, v in doc.items() if k != "vector"},
             }
-            for i, doc in enumerate(ranked)
+            for i, (doc, score) in enumerate(ranked_pairs)
         ]
         self._send(200, {
             "took": 1,
             "timed_out": False,
             "_shards": {"total": 1, "successful": 1, "skipped": 0, "failed": 0},
             "hits": {
-                "total": {"value": len(docs), "relation": "eq"},
+                "total": {"value": len(scored), "relation": "eq"},
                 "max_score": hits[0]["_score"] if hits else None,
                 "hits": hits,
             },

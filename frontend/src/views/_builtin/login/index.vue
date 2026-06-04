@@ -34,7 +34,12 @@ const moduleMap: Record<UnionKey.LoginModule, LoginModule> = {
   'bind-wechat': { label: loginModuleRecord['bind-wechat'], component: BindWechat }
 };
 
-const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
+const activeModule = computed(() => {
+  if (props.module === 'register') {
+    return moduleMap['pwd-login'];
+  }
+  return moduleMap[props.module || 'pwd-login'];
+});
 </script>
 
 <template>
@@ -47,9 +52,7 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
           </span>
           <span class="text-20px font-700">{{ $t('system.title') }}</span>
         </div>
-        <h1 class="mb-0 mt-14 max-w-620px text-38px font-700 leading-tight">
-          企业级私有知识库 RAG 问答系统
-        </h1>
+        <h1 class="mb-0 mt-14 max-w-620px text-38px font-700 leading-tight">龙汇QA</h1>
         <p class="mt-5 max-w-560px text-16px leading-7 color-white/72">
           汇聚企业制度、流程和项目资料，在权限边界内完成检索、问答与来源追溯。
         </p>

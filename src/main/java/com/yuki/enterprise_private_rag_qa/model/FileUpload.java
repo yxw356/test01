@@ -112,6 +112,16 @@ public class FileUpload {
     @Column(name = "duplicate_lines_removed", nullable = false)
     private int duplicateLinesRemoved = 0;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "cleaning_quality_status", nullable = false)
+    private CleaningQualityStatus cleaningQualityStatus = CleaningQualityStatus.OK;
+
+    @Column(name = "cleaning_quality_issues", length = 512)
+    private String cleaningQualityIssues;
+
+    @Column(name = "cleaning_quality_score", nullable = false)
+    private double cleaningQualityScore = 1.0d;
+
     /**
      * 文件是否公开
      * true表示所有用户可访问，false表示仅组织内用户可访问
@@ -143,6 +153,12 @@ public class FileUpload {
         PENDING,
         CLEANING,
         CLEANED,
+        FAILED
+    }
+
+    public enum CleaningQualityStatus {
+        OK,
+        WARNING,
         FAILED
     }
 }

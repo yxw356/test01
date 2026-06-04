@@ -9,14 +9,15 @@ import org.mockito.MockitoAnnotations;
 import org.springframework.http.HttpStatus;
 
 import com.yuki.enterprise_private_rag_qa.exception.CustomException;
+import com.yuki.enterprise_private_rag_qa.model.OrganizationTag;
 import com.yuki.enterprise_private_rag_qa.model.User;
+import com.yuki.enterprise_private_rag_qa.repository.OrganizationTagRepository;
 import com.yuki.enterprise_private_rag_qa.repository.UserRepository;
-import com.yuki.enterprise_private_rag_qa.service.UserService;
 import com.yuki.enterprise_private_rag_qa.utils.PasswordUtil;
 
+import java.util.List;
 import java.util.Optional;
 
-import static org.hamcrest.Matchers.any;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 /**
@@ -26,6 +27,12 @@ class UserServiceTest {
     // 模拟 UserRepository 实例
     @Mock
     private UserRepository userRepository;
+
+    @Mock
+    private OrganizationTagRepository organizationTagRepository;
+
+    @Mock
+    private OrgTagCacheService orgTagCacheService;
 
     // 注入模拟的 UserService 实例
     @InjectMocks
@@ -46,6 +53,8 @@ class UserServiceTest {
     void testRegisterUser_Success() {
         // 假设用户名 "testuser" 在数据库中不存在
         when(userRepository.findByUsername("testuser")).thenReturn(Optional.empty());
+        when(organizationTagRepository.existsByTagId(anyString())).thenReturn(true);
+        when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         // 调用 userService 的 registerUser 方法进行用户注册
         userService.registerUser("testuser", "password123");
@@ -53,8 +62,8 @@ class UserServiceTest {
         // 创建 ArgumentCaptor 来捕获 save 方法的参数
         ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
 
-        // 验证 userRepository.save 被调用了一次，并捕获参数
-        verify(userRepository, times(1)).save(userCaptor.capture());
+        // 验证 userRepository.save 被调用，并捕获参数
+        verify(userRepository, atLeastOnce()).save(userCaptor.capture());
 
         // 获取捕获的 User 对象并进行断言
         User savedUser = userCaptor.getValue();
@@ -127,5 +136,96 @@ void testAuthenticateUser_Success() {
         CustomException exception = assertThrows(CustomException.class, () -> userService.authenticateUser("testuser", "wrongpassword"));
         assertEquals("Invalid username or password", exception.getMessage());
         assertEquals(HttpStatus.UNAUTHORIZED, exception.getStatus());
+    }
+
+    @Test
+    void changeOwnPasswordRequiresCurrentPassword() {
+        User user = new User();
+        user.setUsername("member");
+        user.setPassword(PasswordUtil.encode("oldPass123"));
+        when(userRepository.findByUsername("member")).thenReturn(Optional.of(user));
+
+        CustomException exception = assertThrows(CustomException.class,
+                () -> userService.changeOwnPassword("member", "bad", "newPass123"));
+
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatus());
+        verify(userRepository, never()).save(any(User.class));
+    }
+
+    @Test
+    void changeOwnPasswordUpdatesEncodedPassword() {
+        User user = new User();
+        user.setUsername("member");
+        user.setPassword(PasswordUtil.encode("oldPass123"));
+        when(userRepository.findByUsername("member")).thenReturn(Optional.of(user));
+
+        userService.changeOwnPassword("member", "oldPass123", "newPass123");
+
+        verify(userRepository).save(user);
+        assertTrue(PasswordUtil.matches("newPass123", user.getPassword()));
+    }
+
+    @Test
+    void superAdminCanCreateManagedUserWithAnyRole() {
+        User creator = user("admin", User.Role.SUPER_ADMIN, "HR");
+        when(userRepository.findByUsername("admin")).thenReturn(Optional.of(creator));
+        when(userRepository.findByUsername("newLead")).thenReturn(Optional.empty());
+        when(organizationTagRepository.existsByTagId("HR")).thenReturn(true);
+        when(organizationTagRepository.existsByTagId(startsWith("PRIVATE_"))).thenReturn(true);
+        when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        User created = userService.createManagedUser("admin", new UserService.ManagedUserRequest(
+                "newLead", "pass12345", User.Role.DEPT_LEAD, List.of("HR"), "HR"
+        ));
+
+        assertEquals(User.Role.DEPT_LEAD, created.getRole());
+        assertTrue(created.getOrgTags().contains("HR"));
+        assertEquals("HR", created.getPrimaryOrg());
+    }
+
+    @Test
+    void departmentLeadCanOnlyCreateDepartmentMemberInsideOwnDepartment() {
+        User creator = user("lead", User.Role.DEPT_LEAD, "HR");
+        when(userRepository.findByUsername("lead")).thenReturn(Optional.of(creator));
+
+        CustomException roleException = assertThrows(CustomException.class,
+                () -> userService.createManagedUser("lead", new UserService.ManagedUserRequest(
+                        "badLead", "pass12345", User.Role.DEPT_LEAD, List.of("HR"), "HR"
+                )));
+        assertEquals(HttpStatus.FORBIDDEN, roleException.getStatus());
+
+        CustomException deptException = assertThrows(CustomException.class,
+                () -> userService.createManagedUser("lead", new UserService.ManagedUserRequest(
+                        "outsider", "pass12345", User.Role.DEPT_MEMBER, List.of("FIN"), "FIN"
+                )));
+        assertEquals(HttpStatus.FORBIDDEN, deptException.getStatus());
+    }
+
+    @Test
+    void departmentLeadCanCreateDepartmentMember() {
+        User creator = user("lead", User.Role.DEPT_LEAD, "HR");
+        when(userRepository.findByUsername("lead")).thenReturn(Optional.of(creator));
+        when(userRepository.findByUsername("newMember")).thenReturn(Optional.empty());
+        when(orgTagCacheService.getUserEffectiveOrgTags("lead")).thenReturn(List.of("HR"));
+        when(organizationTagRepository.existsByTagId("HR")).thenReturn(true);
+        when(organizationTagRepository.existsByTagId(startsWith("PRIVATE_"))).thenReturn(true);
+        when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        User created = userService.createManagedUser("lead", new UserService.ManagedUserRequest(
+                "newMember", "pass12345", User.Role.DEPT_MEMBER, List.of("HR"), "HR"
+        ));
+
+        assertEquals(User.Role.DEPT_MEMBER, created.getRole());
+        assertTrue(created.getOrgTags().contains("HR"));
+        assertEquals("HR", created.getPrimaryOrg());
+    }
+
+    private User user(String username, User.Role role, String orgTags) {
+        User user = new User();
+        user.setUsername(username);
+        user.setRole(role);
+        user.setOrgTags(orgTags);
+        user.setPrimaryOrg(orgTags == null || orgTags.isBlank() ? null : orgTags.split(",")[0]);
+        return user;
     }
 }

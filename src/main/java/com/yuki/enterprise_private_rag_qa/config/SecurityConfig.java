@@ -48,8 +48,8 @@ public class SecurityConfig {
                             .requestMatchers("/actuator/health", "/actuator/info").permitAll()
                             // 允许 WebSocket 连接
                             .requestMatchers("/chat/**", "/ws/**").permitAll()
-                            // 允许登录注册接口
-                            .requestMatchers("/api/v1/users/register", "/api/v1/users/login").permitAll()
+                            // 只允许登录接口匿名访问；外部注册关闭，账号由授权用户创建
+                            .requestMatchers("/api/v1/users/login").permitAll()
                             // 允许测试接口
                             .requestMatchers("/api/v1/test/**").permitAll()
                             // 文件上传和下载相关接口 - 普通用户和管理员都可访问
@@ -63,10 +63,13 @@ public class SecurityConfig {
                             .hasAnyRole("USER", "DEPT_MEMBER", "DEPT_LEAD", "KNOWLEDGE_ADMIN", "SUPER_ADMIN", "ADMIN")
                             // 聊天相关接口 - WebSocket停止Token获取 (允许匿名访问)
                             .requestMatchers("/api/chat/websocket-token").permitAll()
+                            // 用户管理列表和创建账号允许超级管理员、兼容管理员、部门负责人访问，服务层继续细分权限
+                            .requestMatchers("/api/v1/admin/users/list", "/api/v1/admin/users")
+                            .hasAnyRole("DEPT_LEAD", "SUPER_ADMIN", "ADMIN")
                             // 管理员专属接口 - 知识库管理、系统状态、用户活动监控
                             .requestMatchers("/api/v1/admin/**").hasAnyRole("SUPER_ADMIN", "ADMIN")
                             // 用户组织标签管理接口
-                            .requestMatchers("/api/v1/users/primary-org")
+                            .requestMatchers("/api/v1/users/primary-org", "/api/v1/users/password")
                             .hasAnyRole("USER", "DEPT_MEMBER", "DEPT_LEAD", "KNOWLEDGE_ADMIN", "SUPER_ADMIN", "ADMIN")
                             // 其他请求需要认证
                             .anyRequest().authenticated())

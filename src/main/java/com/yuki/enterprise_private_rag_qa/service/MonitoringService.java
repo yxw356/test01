@@ -40,6 +40,7 @@ public class MonitoringService {
     private final ElasticsearchClient esClient;
     private final RedisTemplate<String, String> redisTemplate;
     private final OperationMetricsService metricsService;
+    private final ChatConcurrencyLimiter chatConcurrencyLimiter;
     private final WebClient webClient;
     private final MinioClient minioClient;
 
@@ -76,11 +77,13 @@ public class MonitoringService {
     public MonitoringService(ElasticsearchClient esClient,
                              RedisTemplate<String, String> redisTemplate,
                              OperationMetricsService metricsService,
+                             ChatConcurrencyLimiter chatConcurrencyLimiter,
                              MinioClient minioClient,
                              WebClient.Builder webClientBuilder) {
         this.esClient = esClient;
         this.redisTemplate = redisTemplate;
         this.metricsService = metricsService;
+        this.chatConcurrencyLimiter = chatConcurrencyLimiter;
         this.minioClient = minioClient;
         this.webClient = webClientBuilder.build();
     }
@@ -107,6 +110,8 @@ public class MonitoringService {
         metrics.put("chatRequestCount", metricsService.getChatRequestCount());
         metrics.put("chatAverageDurationMs", metricsService.getChatAverageDurationMs());
         metrics.put("chatP95EstimateMs", metricsService.getChatP95EstimateMs());
+        metrics.put("chatActiveCount", chatConcurrencyLimiter.getActiveCount());
+        metrics.put("chatRejectedCount", chatConcurrencyLimiter.getRejectedCount());
         status.put("metrics", metrics);
 
         return status;

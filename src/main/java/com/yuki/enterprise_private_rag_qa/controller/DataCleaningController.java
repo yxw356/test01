@@ -50,6 +50,7 @@ public class DataCleaningController {
                 request.rawText(),
                 config
         );
+        DataCleaningService.CleaningQualityReport qualityReport = dataCleaningService.assessQuality(result);
 
         Map<String, Object> data = new HashMap<>();
         data.put("cleanedText", result.cleanedText());
@@ -58,6 +59,9 @@ public class DataCleaningController {
         data.put("removedChars", result.removedChars());
         data.put("duplicateLinesRemoved", result.duplicateLinesRemoved());
         data.put("compressionRatio", result.compressionRatio());
+        data.put("qualityStatus", qualityReport.status().name());
+        data.put("qualityIssues", qualityReport.issues());
+        data.put("qualityScore", qualityReport.score());
 
         Map<String, Object> response = new HashMap<>();
         response.put("code", 200);

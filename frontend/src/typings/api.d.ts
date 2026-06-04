@@ -121,9 +121,26 @@ declare namespace Api {
     interface SearchResult {
       fileMd5: string;
       chunkId: number;
+      parentId?: string | null;
       textContent: string;
+      parentTextContent?: string | null;
       score: number;
       fileName: string;
+      userId?: string | null;
+      orgTag?: string | null;
+      isPublic?: boolean;
+      knowledgeScope?: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE' | string | null;
+      departmentId?: string | null;
+      retrievalSource?: string | null;
+      rank?: number;
+      queryUsed?: string | null;
+      rrfScore?: number;
+      rrfRank?: number;
+      crossScore?: number;
+      crossRank?: number;
+      mmrScore?: number;
+      finalRank?: number;
+      retrievalSources?: string[];
     }
 
     interface UploadState {
@@ -206,6 +223,9 @@ declare namespace Api {
       removedChars: number;
       duplicateLinesRemoved: number;
       compressionRatio: number;
+      qualityStatus?: 'OK' | 'WARNING' | 'FAILED';
+      qualityIssues?: string[];
+      qualityScore?: number;
     }
 
     interface UploadTask {
@@ -223,11 +243,15 @@ declare namespace Api {
       categoryId?: number | null;
       categoryName?: string | null;
       cleaningRuleSetId?: number | null;
+      cleaningRuleName?: string | null;
       cleaningStatus?: 'PENDING' | 'CLEANING' | 'CLEANED' | 'FAILED';
       originalChars?: number;
       cleanedChars?: number;
       removedChars?: number;
       duplicateLinesRemoved?: number;
+      cleaningQualityStatus?: 'OK' | 'WARNING' | 'FAILED';
+      cleaningQualityIssues?: string | null;
+      cleaningQualityScore?: number;
       public: boolean;
       isPublic: boolean;
       canView?: boolean;
@@ -354,6 +378,8 @@ declare namespace Api {
         chatRequestCount?: number;
         chatAverageDurationMs?: number;
         chatP95EstimateMs?: number;
+        chatActiveCount?: number;
+        chatRejectedCount?: number;
       };
     }
   }

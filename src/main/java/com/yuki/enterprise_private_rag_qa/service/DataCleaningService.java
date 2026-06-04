@@ -107,6 +107,49 @@ public class DataCleaningService {
         ).normalized();
     }
 
+    public CleaningQualityReport assessQuality(CleaningResult result) {
+        if (result == null) {
+            return new CleaningQualityReport(CleaningQualityStatus.FAILED, List.of("EMPTY_RESULT"), 0.0d);
+        }
+
+        List<String> issues = new ArrayList<>();
+        int originalChars = result.originalChars();
+        int cleanedChars = result.cleanedChars();
+
+        if (originalChars > 0 && cleanedChars == 0) {
+            issues.add("CLEANED_EMPTY");
+        }
+        if (originalChars >= 100 && cleanedChars < 20) {
+            issues.add("CLEANED_TOO_SHORT");
+        }
+        if (result.compressionRatio() >= 0.90d && originalChars >= 100) {
+            issues.add("REMOVED_RATIO_HIGH");
+        } else if (result.compressionRatio() >= 0.70d && originalChars >= 100) {
+            issues.add("REMOVED_RATIO_MEDIUM");
+        }
+        if (garbledRatio(result.cleanedText()) >= 0.08d) {
+            issues.add("GARBLED_TEXT");
+        }
+
+        CleaningQualityStatus status;
+        if (issues.contains("CLEANED_EMPTY") || issues.contains("CLEANED_TOO_SHORT") || issues.contains("GARBLED_TEXT")) {
+            status = CleaningQualityStatus.FAILED;
+        } else if (!issues.isEmpty()) {
+            status = CleaningQualityStatus.WARNING;
+        } else {
+            status = CleaningQualityStatus.OK;
+        }
+
+        double score = Math.max(0.0d, 1.0d - result.compressionRatio());
+        if (status == CleaningQualityStatus.FAILED) {
+            score = Math.min(score, 0.35d);
+        } else if (status == CleaningQualityStatus.WARNING) {
+            score = Math.min(score, 0.75d);
+        }
+
+        return new CleaningQualityReport(status, List.copyOf(issues), roundScore(score));
+    }
+
     private String normalizeDocumentText(String rawText, CleaningRuleConfig config) {
         String normalized = rawText;
         if (config.normalizeLineBreaks()) {
@@ -171,6 +214,20 @@ public class DataCleaningService {
                 .toList();
     }
 
+    private double garbledRatio(String text) {
+        if (text == null || text.isBlank()) {
+            return 0.0d;
+        }
+        long suspicious = text.chars()
+                .filter(ch -> ch == '\uFFFD' || ch == '?' || (ch < 32 && ch != '\n' && ch != '\t'))
+                .count();
+        return (double) suspicious / text.length();
+    }
+
+    private double roundScore(double value) {
+        return Math.round(value * 100.0d) / 100.0d;
+    }
+
     public record CleaningRuleConfig(
             boolean normalizeLineBreaks,
             boolean normalizeUnicodeSpaces,
@@ -226,5 +283,18 @@ public class DataCleaningService {
             }
             return (double) removedChars / originalChars;
         }
+    }
+
+    public enum CleaningQualityStatus {
+        OK,
+        WARNING,
+        FAILED
+    }
+
+    public record CleaningQualityReport(
+            CleaningQualityStatus status,
+            List<String> issues,
+            double score
+    ) {
     }
 }

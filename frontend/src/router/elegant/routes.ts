@@ -153,7 +153,7 @@ export const generatedRoutes: GeneratedRoute[] = [
       title: 'user',
       i18nKey: 'route.user',
       icon: 'solar:user-line-duotone',
-      roles: ['ADMIN', 'SUPER_ADMIN'],
+      roles: ['ADMIN', 'SUPER_ADMIN', 'DEPT_LEAD'],
       order: 5
     }
   }

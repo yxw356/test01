@@ -1,7 +1,9 @@
 package com.yuki.enterprise_private_rag_qa.controller;
 
 import com.yuki.enterprise_private_rag_qa.model.FileUpload;
+import com.yuki.enterprise_private_rag_qa.model.CleaningRuleSet;
 import com.yuki.enterprise_private_rag_qa.model.User;
+import com.yuki.enterprise_private_rag_qa.repository.CleaningRuleSetRepository;
 import com.yuki.enterprise_private_rag_qa.repository.FileUploadRepository;
 import com.yuki.enterprise_private_rag_qa.repository.OrganizationTagRepository;
 import com.yuki.enterprise_private_rag_qa.repository.UserRepository;
@@ -23,6 +25,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -35,6 +38,7 @@ class DocumentControllerTest {
     private UserRepository userRepository;
     private OrgTagCacheService orgTagCacheService;
     private OrganizationTagRepository organizationTagRepository;
+    private CleaningRuleSetRepository cleaningRuleSetRepository;
 
     @BeforeEach
     void setUp() {
@@ -49,6 +53,8 @@ class DocumentControllerTest {
         ReflectionTestUtils.setField(controller, "documentService", documentService);
         ReflectionTestUtils.setField(controller, "fileUploadRepository", mock(FileUploadRepository.class));
         ReflectionTestUtils.setField(controller, "organizationTagRepository", organizationTagRepository);
+        cleaningRuleSetRepository = mock(CleaningRuleSetRepository.class);
+        ReflectionTestUtils.setField(controller, "cleaningRuleSetRepository", cleaningRuleSetRepository);
         ReflectionTestUtils.setField(controller, "jwtUtils", mock(JwtUtils.class));
         ReflectionTestUtils.setField(controller, "auditService", mock(AuditService.class));
         documentIndexService = mock(DocumentIndexService.class);
@@ -73,8 +79,16 @@ class DocumentControllerTest {
         ownDepartmentDocument.setCleanedChars(100);
         ownDepartmentDocument.setRemovedChars(20);
         ownDepartmentDocument.setDuplicateLinesRemoved(2);
+        ownDepartmentDocument.setCleaningQualityStatus(FileUpload.CleaningQualityStatus.WARNING);
+        ownDepartmentDocument.setCleaningQualityIssues("REMOVED_RATIO_HIGH");
+        ownDepartmentDocument.setCleaningQualityScore(0.65d);
+        ownDepartmentDocument.setCleaningRuleSetId(7L);
+        CleaningRuleSet cleaningRuleSet = new CleaningRuleSet();
+        cleaningRuleSet.setId(7L);
+        cleaningRuleSet.setName("财务清洗规则");
         FileUpload publicDocument = document("2", "public.md", FileUpload.KnowledgeScope.PUBLIC, "OPS", true);
         when(documentService.getAccessibleFiles("1", "FIN")).thenReturn(List.of(ownDepartmentDocument, publicDocument));
+        when(cleaningRuleSetRepository.findAllById(any())).thenReturn(List.of(cleaningRuleSet));
 
         ResponseEntity<?> response = controller.getAccessibleFiles("1", "FIN");
         Map<String, Object> body = (Map<String, Object>) response.getBody();
@@ -93,6 +107,11 @@ class DocumentControllerTest {
         assertEquals(100, data.get(0).get("cleanedChars"));
         assertEquals(20, data.get(0).get("removedChars"));
         assertEquals(2, data.get(0).get("duplicateLinesRemoved"));
+        assertEquals("WARNING", data.get(0).get("cleaningQualityStatus"));
+        assertEquals("REMOVED_RATIO_HIGH", data.get(0).get("cleaningQualityIssues"));
+        assertEquals(0.65d, (Double) data.get(0).get("cleaningQualityScore"), 0.001d);
+        assertEquals(7L, data.get(0).get("cleaningRuleSetId"));
+        assertEquals("财务清洗规则", data.get(0).get("cleaningRuleName"));
 
         assertTrue((Boolean) data.get(1).get("canView"));
         assertFalse((Boolean) data.get(1).get("canManage"));

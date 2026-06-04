@@ -22,7 +22,7 @@ export const themeSettings: App.Theme.ThemeSetting = {
     mixChildMenuWidth: 200
   },
   footer: { visible: false, fixed: false, height: 48, right: true },
-  watermark: { visible: false, text: '企业知识中枢 Enterprise Knowledge Hub' },
+  watermark: { visible: false, text: '龙汇QA' },
   tokens: {
     light: {
       colors: {

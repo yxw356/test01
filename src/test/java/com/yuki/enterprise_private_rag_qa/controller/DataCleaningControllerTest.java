@@ -156,6 +156,21 @@ class DataCleaningControllerTest {
         verify(ruleSetService).resolveRuleConfig(8L, "1");
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void previewReturnsCleaningQualityReport() {
+        DataCleaningController.PreviewRequest request = new DataCleaningController.PreviewRequest(
+                "正文\n第 1 页 / 共 20 页\n第 2 页 / 共 20 页\n第 3 页 / 共 20 页", null, null
+        );
+
+        ResponseEntity<Map<String, Object>> response = controller.preview(request);
+
+        Map<String, Object> data = (Map<String, Object>) response.getBody().get("data");
+        assertTrue(data.containsKey("qualityStatus"));
+        assertTrue(data.containsKey("qualityIssues"));
+        assertTrue(data.containsKey("qualityScore"));
+    }
+
     private CleaningRuleSet ruleSet(Long id, String name, FileUpload.KnowledgeScope scope, String departmentId) {
         CleaningRuleSet ruleSet = new CleaningRuleSet();
         ruleSet.setId(id);

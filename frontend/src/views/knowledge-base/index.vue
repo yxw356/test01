@@ -101,6 +101,12 @@ const { columns, columnChecks, data, getData, loading } = useTable({
       render: row => renderCleaningStatus(row)
     },
     {
+      key: 'cleaningRuleName',
+      title: '清洗规则',
+      width: 150,
+      render: row => renderCleaningRule(row)
+    },
+    {
       key: 'knowledgeScope',
       title: '知识类型',
       width: 120,
@@ -234,10 +240,9 @@ onUnmounted(() => {
 function startIndexPolling() {
   if (indexPollTimer) clearInterval(indexPollTimer);
   indexPollTimer = setInterval(async () => {
-    if (indexPendingCount.value > 0) {
-      await getList();
-    }
-  }, 5000);
+    if (document.hidden || loading.value || indexPendingCount.value === 0) return;
+    await getList();
+  }, 8000);
 }
 
 /** 异步获取列表函数 该函数主要用于更新或初始化上传任务列表 它首先调用getData函数获取数据，然后根据获取到的数据状态更新任务列表 */
@@ -481,6 +486,11 @@ function renderCategory(row: Api.KnowledgeBase.UploadTask) {
   return <NTag type="primary">{row.categoryName}</NTag>;
 }
 
+function renderCleaningRule(row: Api.KnowledgeBase.UploadTask) {
+  if (row.status !== UploadStatus.Completed) return <NTag bordered={false}>-</NTag>;
+  return <NTag bordered={false}>{cleaningRuleName(row)}</NTag>;
+}
+
 function renderVisibility(row: Api.KnowledgeBase.UploadTask) {
   const scope = normalizeScope(row);
   if (scope === 'PUBLIC') return <NTag type="success">全员可见</NTag>;
@@ -543,6 +553,35 @@ function cleaningStatusText(status?: Api.KnowledgeBase.UploadTask['cleaningStatu
   return '待清洗';
 }
 
+function cleaningQualityText(status?: Api.KnowledgeBase.UploadTask['cleaningQualityStatus'] | Api.KnowledgeBase.CleaningPreviewResult['qualityStatus']) {
+  if (status === 'FAILED') return '质量异常';
+  if (status === 'WARNING') return '需检查';
+  return '质量正常';
+}
+
+function cleaningQualityType(status?: Api.KnowledgeBase.UploadTask['cleaningQualityStatus'] | Api.KnowledgeBase.CleaningPreviewResult['qualityStatus']) {
+  if (status === 'FAILED') return 'error';
+  if (status === 'WARNING') return 'warning';
+  return 'success';
+}
+
+function cleaningQualityIssueText(issue: string) {
+  const issueMap: Record<string, string> = {
+    CLEANED_EMPTY: '清洗后为空',
+    CLEANED_TOO_SHORT: '清洗后正文过短',
+    REMOVED_RATIO_HIGH: '删除比例过高',
+    REMOVED_RATIO_MEDIUM: '删除比例偏高',
+    GARBLED_TEXT: '疑似乱码',
+    EMPTY_RESULT: '没有清洗结果'
+  };
+  return issueMap[issue] || issue;
+}
+
+function cleaningQualityIssues(row: Api.KnowledgeBase.UploadTask) {
+  if (!row.cleaningQualityIssues) return [];
+  return row.cleaningQualityIssues.split(',').filter(Boolean);
+}
+
 function renderCleaningStatus(row: Api.KnowledgeBase.UploadTask) {
   if (row.status !== UploadStatus.Completed) {
     return <NTag bordered={false}>-</NTag>;
@@ -557,9 +596,14 @@ function renderCleaningStatus(row: Api.KnowledgeBase.UploadTask) {
   }
   if (status === 'CLEANED') {
     return (
-      <NButton text type="success" onClick={() => openCleaningDetail(row)}>
-        已清洗 {cleaningRemovedRatio(row)}%
-      </NButton>
+      <div class="cleaning-status-cell">
+        <NButton text type="success" onClick={() => openCleaningDetail(row)}>
+          已清洗 {cleaningRemovedRatio(row)}%
+        </NButton>
+        <NTag size="small" type={cleaningQualityType(row.cleaningQualityStatus)} bordered={false}>
+          {cleaningQualityText(row.cleaningQualityStatus)}
+        </NTag>
+      </div>
     );
   }
   return <NTag type="warning">待清洗</NTag>;
@@ -583,9 +627,13 @@ function availableCleaningRuleOptions(row: Api.KnowledgeBase.UploadTask | null) 
     }));
 }
 
-function cleaningRuleName(ruleSetId?: number | null) {
-  if (!ruleSetId) return '默认清洗规则';
-  return cleaningRuleSets.value.find(item => item.id === ruleSetId)?.name || `规则集 #${ruleSetId}`;
+function cleaningRuleName(rowOrRuleSetId?: Api.KnowledgeBase.UploadTask | number | null) {
+  if (typeof rowOrRuleSetId === 'object' && rowOrRuleSetId) {
+    if (rowOrRuleSetId.cleaningRuleName) return rowOrRuleSetId.cleaningRuleName;
+    return cleaningRuleName(rowOrRuleSetId.cleaningRuleSetId);
+  }
+  if (!rowOrRuleSetId) return '默认清洗规则';
+  return cleaningRuleSets.value.find(item => item.id === rowOrRuleSetId)?.name || `规则集 #${rowOrRuleSetId}`;
 }
 
 function renderReindexButton(row: Api.KnowledgeBase.UploadTask) {
@@ -865,7 +913,7 @@ async function onBeforeUpload(
         :data="filteredTasks"
         size="small"
         :flex-height="!appStore.isMobile"
-        :scroll-x="1092"
+        :scroll-x="1242"
         :loading="loading"
         remote
         :row-key="row => row.fileMd5"
@@ -974,13 +1022,31 @@ async function onBeforeUpload(
             </NButton>
           </div>
           <div class="preview-grid">
-            <NInput v-model:value="cleaningPreviewText" type="textarea" :autosize="{ minRows: 8, maxRows: 12 }" />
+            <div class="preview-pane">
+              <div class="preview-pane-title">
+                <strong>原文</strong>
+                <NTag size="small">{{ cleaningPreviewText.length }} 字</NTag>
+              </div>
+              <NInput v-model:value="cleaningPreviewText" type="textarea" :autosize="{ minRows: 9, maxRows: 13 }" />
+            </div>
             <div class="preview-output">
+              <div class="preview-pane-title">
+                <strong>清洗后</strong>
+                <span>左右对照便于检查误删内容</span>
+              </div>
               <div class="preview-stats">
                 <NTag size="small">原始 {{ cleaningPreviewResult?.originalChars || 0 }}</NTag>
                 <NTag size="small" type="success">清洗后 {{ cleaningPreviewResult?.cleanedChars || 0 }}</NTag>
                 <NTag size="small" type="warning">删除 {{ cleaningPreviewResult?.removedChars || 0 }}</NTag>
                 <NTag size="small" type="info">重复行 {{ cleaningPreviewResult?.duplicateLinesRemoved || 0 }}</NTag>
+                <NTag size="small" :type="cleaningQualityType(cleaningPreviewResult?.qualityStatus)">
+                  {{ cleaningQualityText(cleaningPreviewResult?.qualityStatus) }}
+                </NTag>
+              </div>
+              <div v-if="cleaningPreviewResult?.qualityIssues?.length" class="quality-issues">
+                <NTag v-for="issue in cleaningPreviewResult.qualityIssues" :key="issue" size="small" type="warning">
+                  {{ cleaningQualityIssueText(issue) }}
+                </NTag>
               </div>
               <pre>{{ cleaningPreviewResult?.cleanedText || '点击预览后显示清洗结果' }}</pre>
             </div>
@@ -995,6 +1061,9 @@ async function onBeforeUpload(
           <strong>{{ cleaningDetailTask.fileName }}</strong>
           <NTag :type="cleaningDetailTask.cleaningStatus === 'CLEANED' ? 'success' : 'warning'" :bordered="false">
             {{ cleaningStatusText(cleaningDetailTask.cleaningStatus) }}
+          </NTag>
+          <NTag :type="cleaningQualityType(cleaningDetailTask.cleaningQualityStatus)" :bordered="false">
+            {{ cleaningQualityText(cleaningDetailTask.cleaningQualityStatus) }}
           </NTag>
         </div>
         <div class="detail-grid">
@@ -1014,6 +1083,15 @@ async function onBeforeUpload(
             <span>重复行</span>
             <strong>{{ cleaningDetailTask.duplicateLinesRemoved || 0 }}</strong>
           </div>
+          <div>
+            <span>质量分</span>
+            <strong>{{ cleaningDetailTask.cleaningQualityScore ?? '-' }}</strong>
+          </div>
+        </div>
+        <div v-if="cleaningQualityIssues(cleaningDetailTask).length" class="quality-issues">
+          <NTag v-for="issue in cleaningQualityIssues(cleaningDetailTask)" :key="issue" size="small" type="warning">
+            {{ cleaningQualityIssueText(issue) }}
+          </NTag>
         </div>
         <div class="detail-ratio">
           <span>清洗压缩比例</span>
@@ -1026,7 +1104,7 @@ async function onBeforeUpload(
         </div>
         <div class="detail-rule">
           <span>当前规则</span>
-          <strong>{{ cleaningRuleName(cleaningDetailTask.cleaningRuleSetId) }}</strong>
+          <strong>{{ cleaningRuleName(cleaningDetailTask) }}</strong>
         </div>
         <div v-if="canManageDocument(cleaningDetailTask)" class="detail-actions">
           <NSelect
@@ -1250,6 +1328,7 @@ html.dark .service-command {
   font-size: 13px;
 }
 
+.preview-pane,
 .preview-output {
   display: grid;
   grid-template-rows: auto 1fr;
@@ -1260,7 +1339,26 @@ html.dark .service-command {
   padding: 10px;
 }
 
+.preview-pane-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 24px;
+}
+
+.preview-pane-title span {
+  color: rgb(var(--base-text-color) / 0.56);
+  font-size: 12px;
+}
+
 .preview-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.quality-issues {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -1278,6 +1376,7 @@ html.dark .service-command {
 }
 
 html.dark .rule-list-item,
+html.dark .preview-pane,
 html.dark .preview-output {
   border-color: rgb(255 255 255 / 0.08);
 }
@@ -1289,8 +1388,9 @@ html.dark .preview-output {
 
 .detail-file {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 12px;
 }
 
@@ -1303,7 +1403,7 @@ html.dark .preview-output {
 
 .detail-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
   gap: 10px;
 }
 
@@ -1324,8 +1424,15 @@ html.dark .preview-output {
 .detail-grid strong {
   display: block;
   margin-top: 6px;
-  font-size: 20px;
+  font-size: 18px;
   line-height: 1;
+}
+
+.cleaning-status-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
 .detail-ratio {

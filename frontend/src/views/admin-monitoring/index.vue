@@ -91,6 +91,14 @@ function componentCards() {
             <span>问答 P95(ms)</span>
             <strong>{{ metrics.chatP95EstimateMs ?? 0 }}</strong>
           </div>
+          <div class="metric-item">
+            <span>问答占用中</span>
+            <strong>{{ metrics.chatActiveCount ?? 0 }}</strong>
+          </div>
+          <div class="metric-item">
+            <span>问答限流</span>
+            <strong>{{ metrics.chatRejectedCount ?? 0 }}</strong>
+          </div>
         </div>
         <p v-if="metrics.lastIndexFailureMessage" class="failure-tip">
           最近索引失败：{{ metrics.lastIndexFailureMessage }}

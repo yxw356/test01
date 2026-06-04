@@ -96,14 +96,14 @@ const handShortcut = (e: KeyboardEvent) => {
     <div class="mb-3 flex items-center justify-between gap-3">
       <div class="flex items-center gap-2 text-13px color-[rgb(var(--base-text-color)/0.62)]">
         <icon-solar:shield-check-bold-duotone class="text-18px text-primary" />
-        <span>私有知识库安全检索</span>
+        <span>龙汇QA 安全检索</span>
       </div>
       <NTag :bordered="false" size="small" type="info">RAG</NTag>
     </div>
     <textarea
       ref="inputRef"
       v-model.trim="input.message"
-      placeholder="向企业知识库提问，例如：总结销售合同审批流程"
+      placeholder="向龙汇QA提问，例如：总结销售合同审批流程"
       class="chat-input min-h-10 w-full cursor-text resize-none b-none bg-transparent caret-[rgb(var(--primary-color))] outline-none"
       @keydown="handShortcut"
     />

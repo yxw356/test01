@@ -29,6 +29,7 @@ import java.util.stream.Collectors;
 import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 
 /**
  * UserService 类用于处理用户注册和认证相关的业务逻辑。
@@ -239,6 +240,143 @@ public class UserService {
         }
         // 认证成功，返回用户的用户名
         return user.getUsername();
+    }
+
+    @Transactional
+    public void changeOwnPassword(String username, String currentPassword, String newPassword) {
+        if (currentPassword == null || currentPassword.isBlank() || newPassword == null || newPassword.isBlank()) {
+            throw new CustomException("Current password and new password cannot be empty", HttpStatus.BAD_REQUEST);
+        }
+        if (newPassword.length() < 6) {
+            throw new CustomException("New password must be at least 6 characters", HttpStatus.BAD_REQUEST);
+        }
+
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
+        if (!PasswordUtil.matches(currentPassword, user.getPassword())) {
+            throw new CustomException("Current password is incorrect", HttpStatus.BAD_REQUEST);
+        }
+
+        user.setPassword(PasswordUtil.encode(newPassword));
+        userRepository.save(user);
+        logger.info("User password changed: {}", username);
+    }
+
+    @Transactional
+    public User createManagedUser(String creatorUsername, ManagedUserRequest request) {
+        User creator = userRepository.findByUsername(creatorUsername)
+                .orElseThrow(() -> new CustomException("Creator not found", HttpStatus.NOT_FOUND));
+        validateManagedUserRequest(request);
+
+        if (userRepository.findByUsername(request.username()).isPresent()) {
+            throw new CustomException("Username already exists", HttpStatus.BAD_REQUEST);
+        }
+
+        User.Role targetRole = request.role() == null ? User.Role.DEPT_MEMBER : request.role();
+        List<String> requestedOrgTags = normalizeTags(request.orgTags());
+        String primaryOrg = request.primaryOrg();
+
+        if (creator.isDepartmentLead() && !creator.isSuperAdmin()) {
+            if (targetRole != User.Role.DEPT_MEMBER) {
+                throw new CustomException("Department leads can only create department member accounts", HttpStatus.FORBIDDEN);
+            }
+            List<String> allowedDepartments = effectiveUserOrgTags(creator);
+            if (requestedOrgTags.isEmpty()) {
+                String defaultDepartment = creator.getPrimaryOrg() != null && !creator.getPrimaryOrg().isBlank()
+                        ? creator.getPrimaryOrg()
+                        : allowedDepartments.stream().findFirst().orElse(null);
+                if (defaultDepartment != null) {
+                    requestedOrgTags = List.of(defaultDepartment);
+                }
+            }
+            if (requestedOrgTags.isEmpty() || !allowedDepartments.containsAll(requestedOrgTags)) {
+                throw new CustomException("Department leads can only create accounts inside their own departments", HttpStatus.FORBIDDEN);
+            }
+            if (primaryOrg == null || primaryOrg.isBlank()) {
+                primaryOrg = requestedOrgTags.get(0);
+            }
+            if (!requestedOrgTags.contains(primaryOrg)) {
+                throw new CustomException("Primary department must be included in assigned departments", HttpStatus.BAD_REQUEST);
+            }
+        } else if (!creator.isSuperAdmin()) {
+            throw new CustomException("Only super administrators and department leads can create accounts", HttpStatus.FORBIDDEN);
+        }
+
+        validateOrgTagsExist(requestedOrgTags);
+
+        User user = new User();
+        user.setUsername(request.username().trim());
+        user.setPassword(PasswordUtil.encode(request.password()));
+        user.setRole(targetRole);
+        userRepository.save(user);
+
+        String privateTagId = PRIVATE_TAG_PREFIX + user.getUsername();
+        createPrivateOrgTag(privateTagId, user.getUsername(), user);
+
+        LinkedHashSet<String> finalTags = new LinkedHashSet<>();
+        finalTags.add(privateTagId);
+        finalTags.addAll(requestedOrgTags);
+        user.setOrgTags(String.join(",", finalTags));
+        user.setPrimaryOrg(primaryOrg == null || primaryOrg.isBlank() ? privateTagId : primaryOrg);
+        userRepository.save(user);
+
+        orgTagCacheService.cacheUserOrgTags(user.getUsername(), List.copyOf(finalTags));
+        orgTagCacheService.cacheUserPrimaryOrg(user.getUsername(), user.getPrimaryOrg());
+        logger.info("Managed user created: username={}, role={}, creator={}", user.getUsername(), user.getRole(), creatorUsername);
+        return user;
+    }
+
+    private void validateManagedUserRequest(ManagedUserRequest request) {
+        if (request == null || request.username() == null || request.username().isBlank()
+                || request.password() == null || request.password().isBlank()) {
+            throw new CustomException("Username and password cannot be empty", HttpStatus.BAD_REQUEST);
+        }
+        if (request.password().length() < 6) {
+            throw new CustomException("Password must be at least 6 characters", HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    private List<String> normalizeTags(List<String> tags) {
+        if (tags == null || tags.isEmpty()) {
+            return List.of();
+        }
+        return tags.stream()
+                .filter(tag -> tag != null && !tag.isBlank())
+                .map(String::trim)
+                .distinct()
+                .toList();
+    }
+
+    private List<String> effectiveUserOrgTags(User user) {
+        try {
+            List<String> cached = orgTagCacheService.getUserEffectiveOrgTags(user.getUsername());
+            if (cached != null && !cached.isEmpty()) {
+                return normalizeTags(cached);
+            }
+        } catch (Exception ignored) {
+            // Fallback to persisted user.orgTags below.
+        }
+        if (user.getOrgTags() == null || user.getOrgTags().isBlank()) {
+            return List.of();
+        }
+        return normalizeTags(Arrays.asList(user.getOrgTags().split(",")));
+    }
+
+    private void validateOrgTagsExist(List<String> orgTags) {
+        for (String tag : orgTags) {
+            if (!organizationTagRepository.existsByTagId(tag)) {
+                throw new CustomException("Organization tag does not exist: " + tag, HttpStatus.BAD_REQUEST);
+            }
+        }
+    }
+
+    public record ManagedUserRequest(
+            String username,
+            String password,
+            User.Role role,
+            List<String> orgTags,
+            String primaryOrg
+    ) {
     }
     
     /**
@@ -724,6 +862,17 @@ public class UserService {
      * @return 用户列表数据
      */
     public Map<String, Object> getUserList(String keyword, String orgTag, String role, Integer status, int page, int size) {
+        return getUserList(null, keyword, orgTag, role, status, page, size);
+    }
+
+    public Map<String, Object> getUserList(String requesterUsername, String keyword, String orgTag, String role, Integer status, int page, int size) {
+        User requester = null;
+        List<String> requesterDepartments = List.of();
+        if (requesterUsername != null && !requesterUsername.isBlank()) {
+            requester = userRepository.findByUsername(requesterUsername)
+                    .orElseThrow(() -> new CustomException("Requester not found", HttpStatus.NOT_FOUND));
+            requesterDepartments = effectiveUserOrgTags(requester);
+        }
         // 页码从1开始，需要转换为从0开始
         int pageIndex = page > 0 ? page - 1 : 0;
         // 创建分页请求
@@ -738,9 +887,23 @@ public class UserService {
             }
         }
         User.Role finalRoleFilter = roleFilter;
+        User finalRequester = requester;
+        List<String> finalRequesterDepartments = requesterDepartments;
 
         List<User> filteredUsers = userRepository.findAll().stream()
                 .filter(user -> {
+                    if (finalRequester != null && finalRequester.isDepartmentLead() && !finalRequester.isSuperAdmin()) {
+                        if (user.getRole() != User.Role.DEPT_MEMBER) {
+                            return false;
+                        }
+                        List<String> userTags = user.getOrgTags() == null || user.getOrgTags().isBlank()
+                                ? List.of()
+                                : normalizeTags(Arrays.asList(user.getOrgTags().split(",")));
+                        if (userTags.stream().noneMatch(finalRequesterDepartments::contains)) {
+                            return false;
+                        }
+                    }
+
                     if (keyword != null && !keyword.isBlank() && !user.getUsername().contains(keyword)) {
                         return false;
                     }

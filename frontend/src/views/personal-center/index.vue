@@ -1,5 +1,9 @@
 <script setup lang="ts">
+import type { FormRules } from 'naive-ui';
+
 const { userInfo } = storeToRefs(useAuthStore());
+const { formRef: passwordFormRef, validate: validatePasswordForm, restoreValidation: restorePasswordValidation } = useNaiveForm();
+const { defaultRequiredRule } = useFormRules();
 
 const tags = ref<Api.OrgTag.Mine>({
   orgTags: [],
@@ -44,6 +48,60 @@ const setPrimaryOrg = async () => {
   }
   submitLoading.value = false;
 };
+
+const passwordVisible = ref(false);
+const passwordLoading = ref(false);
+const passwordModel = reactive({
+  currentPassword: '',
+  newPassword: '',
+  confirmPassword: ''
+});
+
+const passwordRules: FormRules = {
+  currentPassword: defaultRequiredRule,
+  newPassword: [
+    defaultRequiredRule,
+    {
+      validator: (_rule, value: string) => !value || value.length >= 6,
+      message: '新密码至少 6 位',
+      trigger: 'input'
+    }
+  ],
+  confirmPassword: [
+    defaultRequiredRule,
+    {
+      validator: (_rule, value: string) => value === passwordModel.newPassword,
+      message: '两次输入的密码不一致',
+      trigger: 'input'
+    }
+  ]
+};
+
+function openPasswordDialog() {
+  passwordModel.currentPassword = '';
+  passwordModel.newPassword = '';
+  passwordModel.confirmPassword = '';
+  restorePasswordValidation();
+  passwordVisible.value = true;
+}
+
+async function changePassword() {
+  await validatePasswordForm();
+  passwordLoading.value = true;
+  const { error } = await request({
+    url: '/users/password',
+    method: 'PUT',
+    data: {
+      currentPassword: passwordModel.currentPassword,
+      newPassword: passwordModel.newPassword
+    }
+  });
+  if (!error) {
+    window.$message?.success('密码修改成功');
+    passwordVisible.value = false;
+  }
+  passwordLoading.value = false;
+}
 </script>
 
 <template>
@@ -59,7 +117,11 @@ const setPrimaryOrg = async () => {
               <icon-solar:user-circle-linear class="text-icon-large" />
             </NAvatar>
             <div>{{ userInfo.username }}</div>
+            <NTag size="small" type="primary" :bordered="false">{{ userInfo.role }}</NTag>
           </div>
+        </template>
+        <template #header-extra>
+          <NButton type="primary" ghost @click="openPasswordDialog">修改密码</NButton>
         </template>
         <NScrollbar class="max-h-60vh">
           <div class="flex flex-wrap gap-4 p-4">
@@ -101,6 +163,39 @@ const setPrimaryOrg = async () => {
         @positive-click="setPrimaryOrg"
         @negative-click="visible = false"
       />
+
+      <NModal
+        v-model:show="passwordVisible"
+        preset="dialog"
+        title="修改密码"
+        :show-icon="false"
+        class="paper-modal w-460px!"
+      >
+        <NForm
+          ref="passwordFormRef"
+          :model="passwordModel"
+          :rules="passwordRules"
+          label-placement="left"
+          :label-width="90"
+          class="mt-10"
+        >
+          <NFormItem label="当前密码" path="currentPassword">
+            <NInput v-model:value="passwordModel.currentPassword" type="password" show-password-on="click" />
+          </NFormItem>
+          <NFormItem label="新密码" path="newPassword">
+            <NInput v-model:value="passwordModel.newPassword" type="password" show-password-on="click" />
+          </NFormItem>
+          <NFormItem label="确认密码" path="confirmPassword">
+            <NInput v-model:value="passwordModel.confirmPassword" type="password" show-password-on="click" />
+          </NFormItem>
+        </NForm>
+        <template #action>
+          <NSpace :size="16">
+            <NButton @click="passwordVisible = false">取消</NButton>
+            <NButton type="primary" :loading="passwordLoading" @click="changePassword">保存</NButton>
+          </NSpace>
+        </template>
+      </NModal>
     </div>
   </NSpin>
 </template>

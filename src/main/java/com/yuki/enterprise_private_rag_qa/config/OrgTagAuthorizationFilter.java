@@ -67,6 +67,7 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
                 path.matches(".*/knowledge-categories.*") ||
                 path.matches(".*/data-cleaning.*") ||
                 path.matches(".*/search/hybrid.*") ||
+                path.matches(".*/users/password.*") ||
                 (path.matches(".*/documents/[a-fA-F0-9]{32}(/(reindex|reclean))?.*")
                         && ("DELETE".equals(request.getMethod()) || "POST".equals(request.getMethod())))) {
                 
@@ -89,6 +90,8 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
                     operation = "数据清洗";
                 } else if (path.contains("/search/hybrid")) {
                     operation = "混合检索";
+                } else if (path.contains("/users/password")) {
+                    operation = "修改密码";
                 } else if ("DELETE".equals(request.getMethod()) && path.matches(".*/documents/[a-fA-F0-9]{32}.*")) {
                     operation = "删除文档";
                 } else if ("POST".equals(request.getMethod()) && path.contains("/reindex")) {

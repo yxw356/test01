@@ -13,9 +13,11 @@ import org.springframework.web.bind.annotation.*;
 
 import com.yuki.enterprise_private_rag_qa.exception.CustomException;
 import com.yuki.enterprise_private_rag_qa.model.AuditAction;
+import com.yuki.enterprise_private_rag_qa.model.CleaningRuleSet;
 import com.yuki.enterprise_private_rag_qa.model.FileUpload;
 import com.yuki.enterprise_private_rag_qa.model.OrganizationTag;
 import com.yuki.enterprise_private_rag_qa.model.User;
+import com.yuki.enterprise_private_rag_qa.repository.CleaningRuleSetRepository;
 import com.yuki.enterprise_private_rag_qa.repository.FileUploadRepository;
 import com.yuki.enterprise_private_rag_qa.repository.OrganizationTagRepository;
 import com.yuki.enterprise_private_rag_qa.service.AuditService;
@@ -35,6 +37,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -52,6 +55,9 @@ public class DocumentController {
     
     @Autowired
     private OrganizationTagRepository organizationTagRepository;
+
+    @Autowired
+    private CleaningRuleSetRepository cleaningRuleSetRepository;
     
     @Autowired
     private JwtUtils jwtUtils;
@@ -90,7 +96,7 @@ public class DocumentController {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
     }
 
-    private Map<String, Object> toDocumentDto(FileUpload file, User currentUser) {
+    private Map<String, Object> toDocumentDto(FileUpload file, User currentUser, Map<Long, String> cleaningRuleNames) {
         Map<String, Object> dto = new HashMap<>();
         dto.put("fileMd5", file.getFileMd5());
         dto.put("fileName", file.getFileName());
@@ -105,11 +111,15 @@ public class DocumentController {
         dto.put("categoryId", file.getCategoryId());
         dto.put("categoryName", file.getCategoryName());
         dto.put("cleaningRuleSetId", file.getCleaningRuleSetId());
+        dto.put("cleaningRuleName", getCleaningRuleName(file.getCleaningRuleSetId(), cleaningRuleNames));
         dto.put("cleaningStatus", file.getCleaningStatus().name());
         dto.put("originalChars", file.getOriginalChars());
         dto.put("cleanedChars", file.getCleanedChars());
         dto.put("removedChars", file.getRemovedChars());
         dto.put("duplicateLinesRemoved", file.getDuplicateLinesRemoved());
+        dto.put("cleaningQualityStatus", file.getCleaningQualityStatus().name());
+        dto.put("cleaningQualityIssues", file.getCleaningQualityIssues());
+        dto.put("cleaningQualityScore", file.getCleaningQualityScore());
         dto.put("canView", documentPermissionService.canView(currentUser, file));
         dto.put("canManage", documentPermissionService.canManage(currentUser, file));
         dto.put("createdAt", file.getCreatedAt());
@@ -117,6 +127,25 @@ public class DocumentController {
         String orgTagName = getOrgTagName(documentPermissionService.effectiveDepartmentId(file));
         dto.put("orgTagName", orgTagName);
         return dto;
+    }
+
+    private Map<Long, String> loadCleaningRuleNames(List<FileUpload> files) {
+        Set<Long> ruleSetIds = files.stream()
+                .map(FileUpload::getCleaningRuleSetId)
+                .filter(id -> id != null)
+                .collect(Collectors.toSet());
+        if (ruleSetIds.isEmpty()) {
+            return Map.of();
+        }
+        return cleaningRuleSetRepository.findAllById(ruleSetIds).stream()
+                .collect(Collectors.toMap(CleaningRuleSet::getId, CleaningRuleSet::getName));
+    }
+
+    private String getCleaningRuleName(Long cleaningRuleSetId, Map<Long, String> cleaningRuleNames) {
+        if (cleaningRuleSetId == null) {
+            return "默认清洗规则";
+        }
+        return cleaningRuleNames.getOrDefault(cleaningRuleSetId, "规则集 #" + cleaningRuleSetId);
     }
 
     /**
@@ -266,8 +295,9 @@ public class DocumentController {
             
             User currentUser = documentPermissionService.requireUser(userId);
             List<FileUpload> files = documentService.getAccessibleFiles(userId, orgTags);
+            Map<Long, String> cleaningRuleNames = loadCleaningRuleNames(files);
             List<Map<String, Object>> fileData = files.stream()
-                    .map(file -> toDocumentDto(file, currentUser))
+                    .map(file -> toDocumentDto(file, currentUser, cleaningRuleNames))
                     .collect(Collectors.toList());
             
             LogUtils.logUserOperation(userId, "GET_ACCESSIBLE_FILES", "file_list", "SUCCESS");
@@ -305,10 +335,11 @@ public class DocumentController {
             
             User currentUser = documentPermissionService.requireUser(userId);
             List<FileUpload> files = documentService.getUserUploadedFiles(userId);
+            Map<Long, String> cleaningRuleNames = loadCleaningRuleNames(files);
             
             // 将FileUpload转换为包含tagName的DTO
             List<Map<String, Object>> fileData = files.stream()
-                    .map(file -> toDocumentDto(file, currentUser))
+                    .map(file -> toDocumentDto(file, currentUser, cleaningRuleNames))
                     .collect(Collectors.toList());
             
             LogUtils.logUserOperation(userId, "GET_USER_UPLOADED_FILES", "file_list", "SUCCESS");
