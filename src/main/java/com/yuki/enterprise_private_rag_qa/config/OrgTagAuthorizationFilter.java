@@ -64,6 +64,7 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
                 path.matches(".*/upload/status.*") || 
                 path.matches(".*/documents/uploads.*") ||
                 path.matches(".*/documents/accessible.*") ||
+                path.matches(".*/documents/knowledge-spaces.*") ||
                 path.matches(".*/knowledge-categories.*") ||
                 path.matches(".*/data-cleaning.*") ||
                 path.matches(".*/search/hybrid.*") ||
@@ -84,6 +85,8 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
                     operation = "获取用户文档";
                 } else if (path.contains("/accessible")) {
                     operation = "获取可访问文档";
+                } else if (path.contains("/knowledge-spaces")) {
+                    operation = "获取知识库分区";
                 } else if (path.contains("/knowledge-categories")) {
                     operation = "管理知识分类";
                 } else if (path.contains("/data-cleaning")) {

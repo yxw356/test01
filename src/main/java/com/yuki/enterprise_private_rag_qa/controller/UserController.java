@@ -62,11 +62,13 @@ public class UserController {
             }
             
             String username = userService.authenticateUser(request.username(), request.password());
+            AuditSupport.ClientInfo clientInfo = AuditSupport.clientInfo(httpRequest.getHeader("User-Agent"));
             if (username == null) {
                 LogUtils.logUserOperation(request.username(), "LOGIN", "authentication", "FAILED_INVALID_CREDENTIALS");
                 auditService.recordFailure(null, request.username(), AuditAction.LOGIN, "user",
                         request.username(), "invalid credentials", AuditSupport.clientIp(httpRequest),
-                        System.currentTimeMillis() - start);
+                        System.currentTimeMillis() - start, clientInfo.userAgent(), clientInfo.deviceType(),
+                        clientInfo.browser(), clientInfo.os());
                 return ResponseEntity.status(401).body(Map.of("code", 401, "message", "Invalid credentials"));
             }
             
@@ -74,7 +76,8 @@ public class UserController {
             String refreshToken = jwtUtils.generateRefreshToken(username);
             LogUtils.logUserOperation(username, "LOGIN", "token_generation", "SUCCESS");
             auditService.recordSuccess(null, username, AuditAction.LOGIN, "user", username,
-                    "login success", AuditSupport.clientIp(httpRequest), System.currentTimeMillis() - start);
+                    "login success", AuditSupport.clientIp(httpRequest), System.currentTimeMillis() - start,
+                    clientInfo.userAgent(), clientInfo.deviceType(), clientInfo.browser(), clientInfo.os());
             monitor.end("登录成功");
             
             return ResponseEntity.ok(Map.of("code", 200, "message", "Login successful", "data", Map.of(

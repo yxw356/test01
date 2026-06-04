@@ -84,6 +84,9 @@ public class FileUpload {
     @Column(name = "department_id")
     private String departmentId;
 
+    @Column(name = "space_id", length = 80)
+    private String spaceId;
+
     @Column(name = "category_id")
     private Long categoryId;
 

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ACTIVE_KNOWLEDGE_SPACE_KEY } from '@/views/knowledge-base/utils/knowledge-space';
+
 const chatStore = useChatStore();
 const { input, list, wsStatus, wsData } = storeToRefs(chatStore);
 
@@ -51,7 +53,7 @@ const handleSend = async () => {
     content: input.value.message,
     role: 'user'
   });
-  chatStore.wsSend(input.value.message);
+  chatStore.wsSend(JSON.stringify({ type: 'chat', message: input.value.message, ...activeKnowledgeSpaceContext() }));
   list.value.push({
     content: '',
     role: 'assistant',
@@ -59,6 +61,21 @@ const handleSend = async () => {
   });
   input.value.message = '';
 };
+
+function activeKnowledgeSpaceContext() {
+  try {
+    const context = JSON.parse(localStorage.getItem(ACTIVE_KNOWLEDGE_SPACE_KEY) || '{}');
+    return {
+      knowledgeScope: context.knowledgeScope || null,
+      departmentId: context.departmentId || null
+    };
+  } catch {
+    return {
+      knowledgeScope: null,
+      departmentId: null
+    };
+  }
+}
 
 const inputRef = ref();
 // 手动插入换行符（确保所有浏览器兼容）

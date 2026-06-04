@@ -1,6 +1,20 @@
 <script setup lang="ts">
+import { ACTIVE_KNOWLEDGE_SPACE_KEY } from '@/views/knowledge-base/utils/knowledge-space';
 import ChatList from './modules/chat-list.vue';
 import InputBox from './modules/input-box.vue';
+
+const activeSpaceTitle = ref('全部可访问知识');
+
+function refreshActiveSpaceTitle() {
+  try {
+    const context = JSON.parse(localStorage.getItem(ACTIVE_KNOWLEDGE_SPACE_KEY) || '{}');
+    activeSpaceTitle.value = context.title || '全部可访问知识';
+  } catch {
+    activeSpaceTitle.value = '全部可访问知识';
+  }
+}
+
+onMounted(refreshActiveSpaceTitle);
 </script>
 
 <template>
@@ -18,6 +32,7 @@ import InputBox from './modules/input-box.vue';
         </p>
       </div>
       <div class="header-tags flex flex-wrap justify-end gap-2 lt-sm:hidden">
+        <NTag :bordered="false" size="small" type="warning">范围：{{ activeSpaceTitle }}</NTag>
         <NTag :bordered="false" size="small">权限隔离</NTag>
         <NTag :bordered="false" size="small" type="info">混合检索</NTag>
         <NTag :bordered="false" size="small" type="success">来源追溯</NTag>

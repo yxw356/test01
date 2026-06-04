@@ -24,6 +24,7 @@ import com.yuki.enterprise_private_rag_qa.service.AuditService;
 import com.yuki.enterprise_private_rag_qa.service.DocumentPermissionService;
 import com.yuki.enterprise_private_rag_qa.service.DocumentIndexService;
 import com.yuki.enterprise_private_rag_qa.service.DocumentService;
+import com.yuki.enterprise_private_rag_qa.service.KnowledgeSpaceService;
 import com.yuki.enterprise_private_rag_qa.utils.AuditSupport;
 import com.yuki.enterprise_private_rag_qa.utils.JwtUtils;
 import com.yuki.enterprise_private_rag_qa.utils.LogUtils;
@@ -70,6 +71,9 @@ public class DocumentController {
 
     @Autowired
     private DocumentPermissionService documentPermissionService;
+
+    @Autowired
+    private KnowledgeSpaceService knowledgeSpaceService;
 
     private Optional<FileUpload> findViewableFileByName(String fileName, String userIdOrUsername) {
         List<FileUpload> candidates = fileUploadRepository.findByFileName(fileName);
@@ -321,6 +325,25 @@ public class DocumentController {
             Map<String, Object> response = new HashMap<>();
             response.put("code", HttpStatus.INTERNAL_SERVER_ERROR.value());
             response.put("message", "获取可访问文件列表失败: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+        }
+    }
+
+    @GetMapping("/knowledge-spaces")
+    public ResponseEntity<?> getKnowledgeSpaces(
+            @RequestAttribute("userId") String userId,
+            @RequestAttribute("orgTags") String orgTags) {
+        try {
+            List<FileUpload> files = documentService.getAccessibleFiles(userId, orgTags);
+            return ResponseEntity.ok(Map.of(
+                    "code", 200,
+                    "message", "获取知识库分区成功",
+                    "data", knowledgeSpaceService.summarize(files)
+            ));
+        } catch (Exception e) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("code", HttpStatus.INTERNAL_SERVER_ERROR.value());
+            response.put("message", "获取知识库分区失败: " + e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
         }
     }

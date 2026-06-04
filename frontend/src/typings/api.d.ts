@@ -165,6 +165,19 @@ declare namespace Api {
       activeUploads: Set<string>; // 当前正在上传的任务ID
     }
 
+    interface KnowledgeSpaceSummary {
+      id: string;
+      type: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      title: string;
+      departmentId: string | null;
+      fileCount: number;
+      indexedCount: number;
+      processingCount: number;
+      interruptedCount: number;
+      cleaningIssueCount: number;
+      lastUpdatedAt: string | null;
+    }
+
     interface Form {
       orgTag: string | null;
       orgTagName: string | null;
@@ -371,6 +384,10 @@ declare namespace Api {
       detail?: string;
       result?: string;
       clientIp?: string;
+      userAgent?: string;
+      deviceType?: string;
+      browser?: string;
+      os?: string;
       durationMs?: number;
       createdAt: string;
     }

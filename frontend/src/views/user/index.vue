@@ -1,5 +1,5 @@
 <script setup lang="tsx">
-import { NButton, NTag } from 'naive-ui';
+import { NButton, NPopconfirm, NSpace, NTag } from 'naive-ui';
 import UserSearch from './modules/user-search.vue';
 import OrgTagSettingDialog from './modules/org-tag-setting-dialog.vue';
 import UserCreateDialog from './modules/user-create-dialog.vue';
@@ -19,6 +19,11 @@ const roleMeta: Record<Api.Auth.UserInfo['role'], { label: string; type: 'defaul
   SUPER_ADMIN: { label: '超级管理员', type: 'error' },
   ADMIN: { label: '超级管理员(兼容)', type: 'error' }
 };
+
+function canDeleteAccount(row: Api.User.Item) {
+  if (String(row.userId) === String(authStore.userInfo.id) || row.username === authStore.userInfo.username) return false;
+  return !['ADMIN', 'SUPER_ADMIN'].includes(row.role);
+}
 
 const { columns, columnChecks, data, getData, loading, mobilePagination, searchParams, resetSearchParams } = useTable({
   apiFn,
@@ -87,15 +92,31 @@ const { columns, columnChecks, data, getData, loading, mobilePagination, searchP
     {
       key: 'operate',
       title: '操作',
-      width: 110,
-      render: row =>
-        authStore.isSuperAdmin ? (
-          <NButton type="primary" ghost size="small" onClick={() => handlePermission(row)}>
-            权限设置
-          </NButton>
-        ) : (
-          <NTag bordered={false}>-</NTag>
-        )
+      width: 180,
+      render: row => {
+        if (!authStore.isSuperAdmin && !authStore.isDeptLead) {
+          return <NTag bordered={false}>-</NTag>;
+        }
+        return (
+          <NSpace size={8}>
+            <NButton type="primary" ghost size="small" onClick={() => handlePermission(row)}>
+              编辑
+            </NButton>
+            {canDeleteAccount(row) ? (
+              <NPopconfirm onPositiveClick={() => handleDelete(row)}>
+                {{
+                  trigger: () => (
+                    <NButton type="error" ghost size="small">
+                      删除
+                    </NButton>
+                  ),
+                  default: () => `确认删除账号「${row.username}」吗？`
+                }}
+              </NPopconfirm>
+            ) : null}
+          </NSpace>
+        );
+      }
     }
   ]
 });
@@ -106,6 +127,19 @@ const editingData = ref<Api.User.Item | null>(null);
 function handlePermission(row: Api.User.Item) {
   editingData.value = row;
   visible.value = true;
+}
+
+async function handleDelete(row: Api.User.Item) {
+  loading.value = true;
+  const { error } = await request({
+    url: `/admin/users/${row.userId}`,
+    method: 'DELETE'
+  });
+  if (!error) {
+    window.$message?.success('账号删除成功');
+    await getData();
+  }
+  loading.value = false;
 }
 
 // async function setPrimaryOrgTag(userId: string, primaryOrg: string) {
@@ -139,7 +173,7 @@ function handlePermission(row: Api.User.Item) {
         :data="data"
         size="small"
         :flex-height="!appStore.isMobile"
-        :scroll-x="962"
+        :scroll-x="1040"
         :loading="loading"
         remote
         :row-key="row => row.userId"

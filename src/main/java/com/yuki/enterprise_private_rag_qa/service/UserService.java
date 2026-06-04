@@ -23,6 +23,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -326,6 +327,132 @@ public class UserService {
         return user;
     }
 
+    @Transactional
+    public User updateManagedUser(String operatorUsername, Long userId, ManagedUserUpdateRequest request) {
+        User operator = userRepository.findByUsername(operatorUsername)
+                .orElseThrow(() -> new CustomException("Operator not found", HttpStatus.NOT_FOUND));
+        User target = userRepository.findById(userId)
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
+        validateManagedUserUpdateRequest(request);
+
+        String oldUsername = target.getUsername();
+        String newUsername = request.username().trim();
+        if (!oldUsername.equals(newUsername)) {
+            Optional<User> existing = userRepository.findByUsername(newUsername);
+            if (existing.isPresent() && !Objects.equals(existing.get().getId(), target.getId())) {
+                throw new CustomException("Username already exists", HttpStatus.BAD_REQUEST);
+            }
+        }
+
+        User.Role targetRole = request.role() == null ? target.getRole() : request.role();
+        List<String> requestedOrgTags = normalizeTags(request.orgTags()).stream()
+                .filter(tag -> !tag.startsWith(PRIVATE_TAG_PREFIX))
+                .toList();
+        String primaryOrg = request.primaryOrg();
+
+        if (operator.isDepartmentLead() && !operator.isSuperAdmin()) {
+            if (target.getRole() != User.Role.DEPT_MEMBER || targetRole != User.Role.DEPT_MEMBER) {
+                throw new CustomException("Department leads can only manage department member accounts", HttpStatus.FORBIDDEN);
+            }
+            List<String> allowedDepartments = effectiveUserOrgTags(operator).stream()
+                    .filter(tag -> !tag.startsWith(PRIVATE_TAG_PREFIX))
+                    .toList();
+            List<String> currentTargetDepartments = normalizeTags(Arrays.asList(
+                    target.getOrgTags() == null ? new String[0] : target.getOrgTags().split(",")
+            )).stream().filter(tag -> !tag.startsWith(PRIVATE_TAG_PREFIX)).toList();
+            if (currentTargetDepartments.stream().noneMatch(allowedDepartments::contains)) {
+                throw new CustomException("Department leads can only manage accounts inside their own departments", HttpStatus.FORBIDDEN);
+            }
+            if (requestedOrgTags.isEmpty()) {
+                requestedOrgTags = List.copyOf(currentTargetDepartments);
+            }
+            if (requestedOrgTags.isEmpty() || !allowedDepartments.containsAll(requestedOrgTags)) {
+                throw new CustomException("Department leads can only assign their own departments", HttpStatus.FORBIDDEN);
+            }
+        } else if (!operator.isSuperAdmin()) {
+            throw new CustomException("Only super administrators and department leads can update accounts", HttpStatus.FORBIDDEN);
+        }
+
+        validateOrgTagsExist(requestedOrgTags);
+        String privateTagId = PRIVATE_TAG_PREFIX + newUsername;
+        if (!oldUsername.equals(newUsername)) {
+            organizationTagRepository.findByTagId(PRIVATE_TAG_PREFIX + oldUsername)
+                    .ifPresent(organizationTagRepository::delete);
+            createPrivateOrgTag(privateTagId, newUsername, target);
+        } else if (!organizationTagRepository.existsByTagId(privateTagId)) {
+            createPrivateOrgTag(privateTagId, newUsername, target);
+        }
+
+        LinkedHashSet<String> finalTags = new LinkedHashSet<>();
+        finalTags.add(privateTagId);
+        finalTags.addAll(requestedOrgTags);
+        if (primaryOrg == null || primaryOrg.isBlank()) {
+            primaryOrg = requestedOrgTags.isEmpty() ? privateTagId : requestedOrgTags.get(0);
+        }
+        if (!finalTags.contains(primaryOrg)) {
+            throw new CustomException("Primary department must be included in assigned departments", HttpStatus.BAD_REQUEST);
+        }
+
+        target.setUsername(newUsername);
+        target.setRole(targetRole);
+        target.setOrgTags(String.join(",", finalTags));
+        target.setPrimaryOrg(primaryOrg);
+        User saved = userRepository.save(target);
+
+        clearUserOrgCaches(oldUsername);
+        if (!oldUsername.equals(newUsername)) {
+            clearUserOrgCaches(newUsername);
+        }
+        orgTagCacheService.cacheUserOrgTags(saved.getUsername(), List.copyOf(finalTags));
+        orgTagCacheService.cacheUserPrimaryOrg(saved.getUsername(), saved.getPrimaryOrg());
+        orgTagCacheService.invalidateAllEffectiveTagsCache();
+        return saved;
+    }
+
+    @Transactional
+    public void deleteManagedUser(String operatorUsername, Long userId) {
+        User operator = userRepository.findByUsername(operatorUsername)
+                .orElseThrow(() -> new CustomException("Operator not found", HttpStatus.NOT_FOUND));
+        User target = userRepository.findById(userId)
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
+
+        if (operator.getId() != null && operator.getId().equals(target.getId())) {
+            throw new CustomException("Cannot delete your own account", HttpStatus.BAD_REQUEST);
+        }
+        if (target.isSuperAdmin()) {
+            throw new CustomException("Cannot delete administrator accounts", HttpStatus.BAD_REQUEST);
+        }
+
+        if (operator.isDepartmentLead() && !operator.isSuperAdmin()) {
+            if (target.getRole() != User.Role.DEPT_MEMBER) {
+                throw new CustomException("Department leads can only delete department member accounts", HttpStatus.FORBIDDEN);
+            }
+            List<String> allowedDepartments = effectiveUserOrgTags(operator);
+            List<String> targetDepartments = target.getOrgTags() == null || target.getOrgTags().isBlank()
+                    ? List.of()
+                    : normalizeTags(Arrays.asList(target.getOrgTags().split(",")));
+            if (targetDepartments.stream()
+                    .filter(tag -> !tag.startsWith(PRIVATE_TAG_PREFIX))
+                    .noneMatch(allowedDepartments::contains)) {
+                throw new CustomException("Department leads can only delete accounts inside their own departments", HttpStatus.FORBIDDEN);
+            }
+        } else if (!operator.isSuperAdmin()) {
+            throw new CustomException("Only super administrators and department leads can delete accounts", HttpStatus.FORBIDDEN);
+        }
+
+        String username = target.getUsername();
+        organizationTagRepository.findByTagId(PRIVATE_TAG_PREFIX + username)
+                .ifPresent(organizationTagRepository::delete);
+        userRepository.delete(target);
+        clearUserOrgCaches(username);
+        orgTagCacheService.invalidateAllEffectiveTagsCache();
+    }
+
+    private void clearUserOrgCaches(String username) {
+        orgTagCacheService.deleteUserOrgTagsCache(username);
+        orgTagCacheService.deleteUserEffectiveTagsCache(username);
+    }
+
     private void validateManagedUserRequest(ManagedUserRequest request) {
         if (request == null || request.username() == null || request.username().isBlank()
                 || request.password() == null || request.password().isBlank()) {
@@ -333,6 +460,12 @@ public class UserService {
         }
         if (request.password().length() < 6) {
             throw new CustomException("Password must be at least 6 characters", HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    private void validateManagedUserUpdateRequest(ManagedUserUpdateRequest request) {
+        if (request == null || request.username() == null || request.username().isBlank()) {
+            throw new CustomException("Username cannot be empty", HttpStatus.BAD_REQUEST);
         }
     }
 
@@ -373,6 +506,14 @@ public class UserService {
     public record ManagedUserRequest(
             String username,
             String password,
+            User.Role role,
+            List<String> orgTags,
+            String primaryOrg
+    ) {
+    }
+
+    public record ManagedUserUpdateRequest(
+            String username,
             User.Role role,
             List<String> orgTags,
             String primaryOrg

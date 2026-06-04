@@ -11,6 +11,7 @@ import com.yuki.enterprise_private_rag_qa.service.AuditService;
 import com.yuki.enterprise_private_rag_qa.service.DocumentIndexService;
 import com.yuki.enterprise_private_rag_qa.service.DocumentPermissionService;
 import com.yuki.enterprise_private_rag_qa.service.DocumentService;
+import com.yuki.enterprise_private_rag_qa.service.KnowledgeSpaceService;
 import com.yuki.enterprise_private_rag_qa.service.OrgTagCacheService;
 import com.yuki.enterprise_private_rag_qa.utils.JwtUtils;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,6 +36,7 @@ class DocumentControllerTest {
     private DocumentController controller;
     private DocumentService documentService;
     private DocumentIndexService documentIndexService;
+    private KnowledgeSpaceService knowledgeSpaceService;
     private UserRepository userRepository;
     private OrgTagCacheService orgTagCacheService;
     private OrganizationTagRepository organizationTagRepository;
@@ -49,6 +51,7 @@ class DocumentControllerTest {
         organizationTagRepository = mock(OrganizationTagRepository.class);
 
         DocumentPermissionService permissionService = new DocumentPermissionService(userRepository, orgTagCacheService);
+        knowledgeSpaceService = new KnowledgeSpaceService(organizationTagRepository);
 
         ReflectionTestUtils.setField(controller, "documentService", documentService);
         ReflectionTestUtils.setField(controller, "fileUploadRepository", mock(FileUploadRepository.class));
@@ -60,6 +63,31 @@ class DocumentControllerTest {
         documentIndexService = mock(DocumentIndexService.class);
         ReflectionTestUtils.setField(controller, "documentIndexService", documentIndexService);
         ReflectionTestUtils.setField(controller, "documentPermissionService", permissionService);
+        ReflectionTestUtils.setField(controller, "knowledgeSpaceService", knowledgeSpaceService);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void knowledgeSpacesSummarizeAccessibleDocuments() {
+        when(organizationTagRepository.findByTagId("FIN")).thenReturn(Optional.empty());
+        FileUpload publicDocument = document("2", "public.md", FileUpload.KnowledgeScope.PUBLIC, null, true);
+        FileUpload departmentDocument = document("1", "finance.md", FileUpload.KnowledgeScope.DEPARTMENT, "FIN", false);
+        departmentDocument.setIndexStatus(0);
+        departmentDocument.setStatus(0);
+        departmentDocument.setCleaningQualityStatus(FileUpload.CleaningQualityStatus.WARNING);
+        when(documentService.getAccessibleFiles("1", "FIN")).thenReturn(List.of(publicDocument, departmentDocument));
+
+        ResponseEntity<?> response = controller.getKnowledgeSpaces("1", "FIN");
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        List<KnowledgeSpaceService.KnowledgeSpaceSummary> data =
+                (List<KnowledgeSpaceService.KnowledgeSpaceSummary>) body.get("data");
+
+        assertEquals(200, body.get("code"));
+        assertEquals(2, data.size());
+        assertEquals("PUBLIC", data.get(0).id());
+        assertEquals("DEPARTMENT:FIN", data.get(1).id());
+        assertEquals(1, data.get(1).processingCount());
+        assertEquals(1, data.get(1).cleaningIssueCount());
     }
 
     @Test

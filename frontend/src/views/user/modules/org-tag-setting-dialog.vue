@@ -19,20 +19,24 @@ const { formRef, validate, restoreValidation } = useNaiveForm();
 const { defaultRequiredRule } = useFormRules();
 
 type Model = {
+  username: string;
   role: Api.Auth.UserInfo['role'];
   orgTags: string[];
+  primaryOrg: string;
 };
 
 const model = ref<Model>(createDefaultModel());
 
 function createDefaultModel(): Model {
   return {
+    username: '',
     role: 'USER',
-    orgTags: []
+    orgTags: [],
+    primaryOrg: ''
   };
 }
 
-const roleOptions = [
+const allRoleOptions = [
   { label: '普通用户', value: 'USER' },
   { label: '部门成员', value: 'DEPT_MEMBER' },
   { label: '部门负责人', value: 'DEPT_LEAD' },
@@ -40,6 +44,13 @@ const roleOptions = [
   { label: '超级管理员', value: 'SUPER_ADMIN' },
   { label: '超级管理员(兼容旧ADMIN)', value: 'ADMIN' }
 ] satisfies Array<{ label: string; value: Api.Auth.UserInfo['role'] }>;
+
+const roleOptions = computed(() => {
+  if (authStore.isDeptLead && !authStore.isSuperAdmin) {
+    return allRoleOptions.filter(item => item.value === 'DEPT_MEMBER');
+  }
+  return allRoleOptions;
+});
 
 const filePermissionOptions = [
   { label: '查看列表', value: 'VIEW', description: '允许在可见范围内看到文件记录' },
@@ -56,17 +67,17 @@ const filePermissionOptions = [
 const filePermissionValues = ref<Api.User.FilePermissionAction[]>([]);
 
 const rules = ref<FormRules>({
+  username: defaultRequiredRule,
   role: defaultRequiredRule,
   orgTags: defaultRequiredRule
 });
 
-const privateOrgTag = ref<string[]>([]);
 async function handleUpdateModelWhenEdit() {
   model.value = createDefaultModel();
+  model.value.username = props.rowData.username;
   model.value.role = props.rowData.role || 'USER';
   model.value.orgTags = props.rowData.orgTags.map(tag => tag.tagId!);
-  // 备份默认的私人空间标签，防止被误删
-  privateOrgTag.value = props.rowData.orgTags.filter(tag => tag.tagId!.startsWith('PRIVATE_')).map(tag => tag.tagId!);
+  model.value.primaryOrg = props.rowData.primaryOrg || model.value.orgTags[0] || '';
   await loadRoleFilePermissions(model.value.role);
 }
 
@@ -105,25 +116,15 @@ async function saveRoleFilePermissions() {
 async function handleSubmit() {
   await validate();
   loading.value = true;
-  model.value.orgTags = Array.from(new Set([...model.value.orgTags, ...privateOrgTag.value]));
-
-  if (model.value.role !== props.rowData.role) {
-    const roleRes = await request({
-      method: 'PUT',
-      url: `/admin/users/${props.rowData.userId}/role`,
-      data: { role: model.value.role }
-    });
-
-    if (roleRes.error) {
-      loading.value = false;
-      return;
-    }
-  }
-
   const res = await request({
     method: 'PUT',
-    url: `/admin/users/${props.rowData.userId}/org-tags`,
-    data: { orgTags: model.value.orgTags }
+    url: `/admin/users/${props.rowData.userId}`,
+    data: {
+      username: model.value.username.trim(),
+      role: model.value.role,
+      orgTags: model.value.orgTags,
+      primaryOrg: model.value.primaryOrg || model.value.orgTags[0]
+    }
   });
   if (!res.error && (await saveRoleFilePermissions())) {
     window.$message?.success('操作成功');
@@ -152,7 +153,7 @@ watch(
   <NModal
     v-model:show="visible"
     preset="dialog"
-    title="权限设置"
+    title="编辑账号"
     :show-icon="false"
     :mask-closable="false"
     class="w-500px!"
@@ -160,13 +161,21 @@ watch(
   >
     <NForm ref="formRef" :model="model" :rules="rules" label-placement="left" :label-width="100" mt-10>
       <NFormItem label="用户名" path="username">
-        <NInput :value="rowData.username" readonly />
+        <NInput v-model:value="model.username" placeholder="请输入用户名" />
       </NFormItem>
       <NFormItem label="角色" path="role">
-        <NSelect v-model:value="model.role" :options="roleOptions" />
+        <NSelect v-model:value="model.role" :options="roleOptions" :disabled="authStore.isDeptLead && !authStore.isSuperAdmin" />
       </NFormItem>
       <NFormItem label="所属部门" path="orgTags">
         <OrgTagCascader v-model:value="model.orgTags" multiple exclude-private />
+      </NFormItem>
+      <NFormItem label="主部门" path="primaryOrg">
+        <NSelect
+          v-model:value="model.primaryOrg"
+          :options="model.orgTags.map(tag => ({ label: tag, value: tag }))"
+          placeholder="默认取第一个所属部门"
+          clearable
+        />
       </NFormItem>
       <NFormItem v-if="authStore.isSuperAdmin" label="文件权限">
         <NSpin :show="permissionLoading" class="w-full">

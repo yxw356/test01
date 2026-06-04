@@ -263,6 +263,60 @@ public class AdminController {
                     .body(Map.of("code", 500, "message", "创建账号失败: " + e.getMessage()));
         }
     }
+
+    @PutMapping("/users/{userId}")
+    public ResponseEntity<?> updateManagedUser(
+            @RequestHeader("Authorization") String token,
+            @PathVariable Long userId,
+            @RequestBody ManagedUserUpdateRequest request) {
+
+        String operatorUsername = jwtUtils.extractUsernameFromToken(token.replace("Bearer ", ""));
+        validateUserManager(operatorUsername);
+
+        try {
+            User updated = userService.updateManagedUser(operatorUsername, userId, new UserService.ManagedUserUpdateRequest(
+                    request.username(),
+                    request.role(),
+                    request.orgTags() == null ? List.of() : request.orgTags(),
+                    request.primaryOrg()
+            ));
+            Map<String, Object> data = new HashMap<>();
+            data.put("userId", updated.getId());
+            data.put("username", updated.getUsername());
+            data.put("role", updated.getRole().name());
+            data.put("orgTags", updated.getOrgTags());
+            data.put("primaryOrg", updated.getPrimaryOrg());
+            return ResponseEntity.ok(Map.of("code", 200, "message", "账号更新成功", "data", data));
+        } catch (CustomException e) {
+            LogUtils.logBusinessError("ADMIN_UPDATE_MANAGED_USER", operatorUsername, "更新账号失败: %s", e, e.getMessage());
+            return ResponseEntity.status(e.getStatus()).body(Map.of("code", e.getStatus().value(), "message", e.getMessage()));
+        } catch (Exception e) {
+            LogUtils.logBusinessError("ADMIN_UPDATE_MANAGED_USER", operatorUsername, "更新账号异常: %s", e, e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("code", 500, "message", "更新账号失败: " + e.getMessage()));
+        }
+    }
+
+    @DeleteMapping("/users/{userId}")
+    public ResponseEntity<?> deleteManagedUser(
+            @RequestHeader("Authorization") String token,
+            @PathVariable Long userId) {
+
+        String operatorUsername = jwtUtils.extractUsernameFromToken(token.replace("Bearer ", ""));
+        validateUserManager(operatorUsername);
+
+        try {
+            userService.deleteManagedUser(operatorUsername, userId);
+            return ResponseEntity.ok(Map.of("code", 200, "message", "账号删除成功"));
+        } catch (CustomException e) {
+            LogUtils.logBusinessError("ADMIN_DELETE_MANAGED_USER", operatorUsername, "删除账号失败: %s", e, e.getMessage());
+            return ResponseEntity.status(e.getStatus()).body(Map.of("code", e.getStatus().value(), "message", e.getMessage()));
+        } catch (Exception e) {
+            LogUtils.logBusinessError("ADMIN_DELETE_MANAGED_USER", operatorUsername, "删除账号异常: %s", e, e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("code", 500, "message", "删除账号失败: " + e.getMessage()));
+        }
+    }
     
     /**
      * 创建组织标签
@@ -733,6 +787,13 @@ record AdminUserRequest(String username, String password) {}
 record ManagedUserRequest(
         String username,
         String password,
+        User.Role role,
+        List<String> orgTags,
+        String primaryOrg
+) {}
+
+record ManagedUserUpdateRequest(
+        String username,
         User.Role role,
         List<String> orgTags,
         String primaryOrg

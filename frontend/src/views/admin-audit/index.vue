@@ -60,7 +60,11 @@ const columns: DataTableColumns<Api.Admin.AuditLog> = [
     width: 90,
     render: row => row.durationMs ?? '-'
   },
-  { title: 'IP', key: 'clientIp', width: 130 }
+  { title: 'IP', key: 'clientIp', width: 130 },
+  { title: '设备', key: 'deviceType', width: 90, render: row => row.deviceType || '-' },
+  { title: '浏览器', key: 'browser', width: 100, render: row => row.browser || '-' },
+  { title: '系统', key: 'os', width: 100, render: row => row.os || '-' },
+  { title: 'User-Agent', key: 'userAgent', minWidth: 260, ellipsis: { tooltip: true } }
 ];
 
 async function fetchLogs() {
@@ -99,7 +103,7 @@ function handlePageChange(page: number) {
 
 <template>
   <div class="paper-page min-h-500px flex-col-stretch gap-16px overflow-hidden lt-sm:overflow-auto">
-    <NCard title="审计日志" :bordered="false" size="small" class="paper-card card-wrapper">
+    <NCard title="操作日志" :bordered="false" size="small" class="paper-card card-wrapper">
       <NForm inline label-placement="left" :show-feedback="false" class="mb-4">
         <NFormItem label="用户ID">
           <NInput v-model:value="searchParams.userId" placeholder="用户名或用户ID" clearable class="w-200px!" />
@@ -118,7 +122,7 @@ function handlePageChange(page: number) {
         </NFormItem>
       </NForm>
 
-      <NDataTable :loading="loading" :columns="columns" :data="list" :scroll-x="1100" size="small" />
+      <NDataTable :loading="loading" :columns="columns" :data="list" :scroll-x="1600" size="small" />
 
       <div class="mt-4 flex justify-end">
         <NPagination

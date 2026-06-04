@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { UploadFileInfo } from 'naive-ui';
+import type { KnowledgeSpace } from '../utils/knowledge-space';
 import { defaultMaxUploadFileSize, uploadAccept } from '@/constants/common';
 
 defineOptions({
@@ -8,6 +9,9 @@ defineOptions({
 
 const loading = ref(false);
 const visible = defineModel<boolean>('visible', { default: false });
+const props = defineProps<{
+  initialSpace?: KnowledgeSpace | null;
+}>();
 
 const authStore = useAuthStore();
 
@@ -42,13 +46,20 @@ const defaultKnowledgeScope = computed<KnowledgeScope>(() => knowledgeScopeOptio
 
 const model = ref<Api.KnowledgeBase.Form>(createDefaultModel());
 
+function initialKnowledgeScope(): KnowledgeScope {
+  if (props.initialSpace?.type === 'PUBLIC' && canUploadPublic.value) return 'PUBLIC';
+  if (props.initialSpace?.type === 'DEPARTMENT' && canUploadDepartment.value) return 'DEPARTMENT';
+  return defaultKnowledgeScope.value;
+}
+
 function createDefaultModel(): Api.KnowledgeBase.Form {
-  const knowledgeScope = defaultKnowledgeScope.value;
+  const knowledgeScope = initialKnowledgeScope();
+  const departmentId = knowledgeScope === 'DEPARTMENT' ? props.initialSpace?.departmentId || null : null;
   return {
-    orgTag: null,
+    orgTag: departmentId,
     orgTagName: '',
     knowledgeScope,
-    departmentId: null,
+    departmentId,
     categoryId: null,
     categoryName: null,
     cleaningRuleSetId: null,

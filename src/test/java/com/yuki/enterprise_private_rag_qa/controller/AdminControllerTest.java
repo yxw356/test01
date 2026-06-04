@@ -30,6 +30,7 @@ class AdminControllerTest {
     private UserRepository userRepository;
     private JwtUtils jwtUtils;
     private RoleFilePermissionService roleFilePermissionService;
+    private UserService userService;
 
     @BeforeEach
     void setUp() {
@@ -37,14 +38,53 @@ class AdminControllerTest {
         userRepository = mock(UserRepository.class);
         jwtUtils = mock(JwtUtils.class);
         roleFilePermissionService = mock(RoleFilePermissionService.class);
+        userService = mock(UserService.class);
 
         ReflectionTestUtils.setField(controller, "userRepository", userRepository);
         ReflectionTestUtils.setField(controller, "jwtUtils", jwtUtils);
-        ReflectionTestUtils.setField(controller, "userService", mock(UserService.class));
+        ReflectionTestUtils.setField(controller, "userService", userService);
         ReflectionTestUtils.setField(controller, "organizationTagRepository", mock(OrganizationTagRepository.class));
         ReflectionTestUtils.setField(controller, "redisTemplate", mock(RedisTemplate.class));
         ReflectionTestUtils.setField(controller, "objectMapper", new ObjectMapper());
         ReflectionTestUtils.setField(controller, "roleFilePermissionService", roleFilePermissionService);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void superAdminCanUpdateManagedUser() {
+        when(jwtUtils.extractUsernameFromToken("token")).thenReturn("admin");
+        when(userRepository.findByUsername("admin")).thenReturn(Optional.of(user(1L, "admin", User.Role.SUPER_ADMIN)));
+        User updated = user(2L, "hr2", User.Role.DEPT_LEAD);
+        updated.setOrgTags("PRIVATE_hr2,HR");
+        updated.setPrimaryOrg("HR");
+        when(userService.updateManagedUser("admin", 2L, new UserService.ManagedUserUpdateRequest(
+                "hr2", User.Role.DEPT_LEAD, List.of("HR"), "HR"
+        ))).thenReturn(updated);
+
+        ResponseEntity<?> response = controller.updateManagedUser(
+                "Bearer token",
+                2L,
+                new ManagedUserUpdateRequest("hr2", User.Role.DEPT_LEAD, List.of("HR"), "HR")
+        );
+
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals(200, body.get("code"));
+        verify(userService).updateManagedUser("admin", 2L, new UserService.ManagedUserUpdateRequest(
+                "hr2", User.Role.DEPT_LEAD, List.of("HR"), "HR"
+        ));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void superAdminCanDeleteManagedUser() {
+        when(jwtUtils.extractUsernameFromToken("token")).thenReturn("admin");
+        when(userRepository.findByUsername("admin")).thenReturn(Optional.of(user(1L, "admin", User.Role.SUPER_ADMIN)));
+
+        ResponseEntity<?> response = controller.deleteManagedUser("Bearer token", 2L);
+
+        Map<String, Object> body = (Map<String, Object>) response.getBody();
+        assertEquals(200, body.get("code"));
+        verify(userService).deleteManagedUser("admin", 2L);
     }
 
     @Test

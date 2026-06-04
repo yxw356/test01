@@ -47,6 +47,18 @@ public class AuditLog {
     @Column(name = "client_ip", length = 64)
     private String clientIp;
 
+    @Column(name = "user_agent", length = 512)
+    private String userAgent;
+
+    @Column(name = "device_type", length = 32)
+    private String deviceType;
+
+    @Column(length = 64)
+    private String browser;
+
+    @Column(length = 64)
+    private String os;
+
     @Column(name = "duration_ms")
     private Long durationMs;
 
@@ -55,6 +67,13 @@ public class AuditLog {
 
     public AuditLog(String userId, String username, AuditAction action, String resourceType,
                     String resourceId, String detail, String result, String clientIp, Long durationMs) {
+        this(userId, username, action, resourceType, resourceId, detail, result, clientIp, durationMs,
+                null, null, null, null);
+    }
+
+    public AuditLog(String userId, String username, AuditAction action, String resourceType,
+                    String resourceId, String detail, String result, String clientIp, Long durationMs,
+                    String userAgent, String deviceType, String browser, String os) {
         this.userId = userId;
         this.username = username;
         this.action = action;
@@ -63,6 +82,10 @@ public class AuditLog {
         this.detail = detail;
         this.result = result;
         this.clientIp = clientIp;
+        this.userAgent = userAgent;
+        this.deviceType = deviceType;
+        this.browser = browser;
+        this.os = os;
         this.durationMs = durationMs;
         this.createdAt = LocalDateTime.now();
     }

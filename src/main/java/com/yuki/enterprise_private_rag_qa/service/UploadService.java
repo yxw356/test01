@@ -46,6 +46,9 @@ public class UploadService {
     private ChunkInfoRepository chunkInfoRepository;
 
     @Autowired
+    private KnowledgeSpaceService knowledgeSpaceService;
+
+    @Autowired
     private String minioPublicUrl; // 注入 MinIO 的公共访问地址
 
     /**
@@ -94,6 +97,7 @@ public class UploadService {
                 fileUpload.setCategoryId(categoryId);
                 fileUpload.setCategoryName(categoryName);
                 fileUpload.setCleaningRuleSetId(cleaningRuleSetId);
+                fileUpload.setSpaceId(knowledgeSpaceService.ensureSpaceForDocument(fileUpload));
                 try {
                     fileUploadRepository.save(fileUpload);
                     logger.info("文件记录创建成功 => fileMd5: {}, fileName: {}, fileType: {}", fileMd5, fileName, fileType);

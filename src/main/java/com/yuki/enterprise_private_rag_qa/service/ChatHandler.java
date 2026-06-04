@@ -88,6 +88,10 @@ public class ChatHandler {
     }
 
     public void processMessage(String userId, String userMessage, WebSocketSession session) {
+        processMessage(userId, userMessage, session, null);
+    }
+
+    public void processMessage(String userId, String userMessage, WebSocketSession session, KnowledgeSpaceContext knowledgeSpaceContext) {
         logger.info("开始处理消息，用户ID: {}, 会话ID: {}", userId, session.getId());
         long chatStart = System.currentTimeMillis();
         chatStartTimes.put(session.getId(), chatStart);
@@ -131,8 +135,9 @@ public class ChatHandler {
                     ragResult.isFallback());
 
             // 5. 构建上下文
-            String context = buildContext(ragResult.finalDocs());
-            sessionRetrievalResults.put(sessionId, ragResult.finalDocs());
+            List<SearchResult> finalDocs = filterByKnowledgeSpace(ragResult.finalDocs(), knowledgeSpaceContext);
+            String context = buildContext(finalDocs);
+            sessionRetrievalResults.put(sessionId, finalDocs);
             logger.info("RAG context built, contextLength: {}", context.length());
 
             // 6. 调用 DeepSeek API 并处理流式响应
@@ -178,6 +183,28 @@ public class ChatHandler {
             cleanupActiveStream(session.getId());
             releaseChatPermit(session.getId());
         }
+    }
+
+    List<SearchResult> filterByKnowledgeSpace(List<SearchResult> results, KnowledgeSpaceContext context) {
+        if (results == null || results.isEmpty() || context == null || context.knowledgeScope() == null || context.knowledgeScope().isBlank()) {
+            return results == null ? List.of() : results;
+        }
+        String scope = context.knowledgeScope().trim();
+        if ("PUBLIC".equalsIgnoreCase(scope)) {
+            return results.stream()
+                    .filter(result -> "PUBLIC".equalsIgnoreCase(result.getKnowledgeScope()) || Boolean.TRUE.equals(result.getIsPublic()))
+                    .toList();
+        }
+        if ("DEPARTMENT".equalsIgnoreCase(scope) && context.departmentId() != null && !context.departmentId().isBlank()) {
+            return results.stream()
+                    .filter(result -> "DEPARTMENT".equalsIgnoreCase(result.getKnowledgeScope()))
+                    .filter(result -> context.departmentId().equals(result.getDepartmentId()) || context.departmentId().equals(result.getOrgTag()))
+                    .toList();
+        }
+        return results;
+    }
+
+    public record KnowledgeSpaceContext(String knowledgeScope, String departmentId) {
     }
 
     private void completeResponse(String userId, String conversationId, String userMessage, WebSocketSession session) {

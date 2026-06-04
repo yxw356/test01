@@ -9,6 +9,7 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yuki.enterprise_private_rag_qa.service.ChatHandler;
+import com.yuki.enterprise_private_rag_qa.service.ChatHandler.KnowledgeSpaceContext;
 import com.yuki.enterprise_private_rag_qa.utils.JwtUtils;
 
 import java.util.concurrent.ConcurrentHashMap;
@@ -59,6 +60,13 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                         // 处理停止指令
                         logger.info("收到有效的停止按钮指令，用户ID: {}，会话ID: {}", userId, session.getId());
                         chatHandler.stopResponse(userId, session);
+                        return;
+                    }
+                    if ("chat".equals(messageType) && jsonMessage.get("message") instanceof String chatMessage) {
+                        chatHandler.processMessage(userId, chatMessage, session, new KnowledgeSpaceContext(
+                                (String) jsonMessage.get("knowledgeScope"),
+                                (String) jsonMessage.get("departmentId")
+                        ));
                         return;
                     }
                     

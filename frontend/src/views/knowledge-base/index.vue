@@ -1,11 +1,19 @@
 <script setup lang="tsx">
 import type { UploadFileInfo } from 'naive-ui';
 import { NButton, NEllipsis, NModal, NPopconfirm, NProgress, NTag, NTooltip, NUpload } from 'naive-ui';
+import { VueDraggable } from 'vue-draggable-plus';
 import { uploadAccept } from '@/constants/common';
 import { fakePaginationRequest } from '@/service/request';
 import { UploadStatus, IndexStatus } from '@/enum';
 import SvgIcon from '@/components/custom/svg-icon.vue';
 import FilePreview from '@/components/custom/file-preview.vue';
+import {
+  ACTIVE_KNOWLEDGE_SPACE_KEY,
+  applySpaceLayout,
+  buildKnowledgeSpaces,
+  filterTasksBySpace,
+  type KnowledgeSpace
+} from './utils/knowledge-space';
 import UploadDialog from './modules/upload-dialog.vue';
 import SearchDialog from './modules/search-dialog.vue';
 
@@ -192,7 +200,13 @@ const ruleCreateModel = reactive<Api.KnowledgeBase.CleaningRuleSetCreateForm>({
   dropLinePatterns: []
 });
 
-const filteredTasks = computed(() => {
+const knowledgeSpaceLayoutKey = computed(() => `knowledge-space-layout:${authStore.userInfo.id || authStore.userInfo.username || 'guest'}`);
+const selectedSpaceKey = computed(() => `knowledge-space-selected:${authStore.userInfo.id || authStore.userInfo.username || 'guest'}`);
+const selectedSpaceId = ref<string | null>(null);
+const spaceBoardItems = ref<KnowledgeSpace[]>([]);
+const serverKnowledgeSpaces = ref<KnowledgeSpace[] | null>(null);
+
+const baseFilteredTasks = computed(() => {
   return tasks.value.filter(item => {
     const keyword = filterModel.keyword.trim().toLowerCase();
     if (keyword && !item.fileName.toLowerCase().includes(keyword)) return false;
@@ -207,6 +221,16 @@ const filteredTasks = computed(() => {
     return true;
   });
 });
+
+const hasActiveFilters = computed(
+  () => Boolean(filterModel.keyword.trim()) || Boolean(filterModel.knowledgeScope) || Boolean(filterModel.departmentId) || Boolean(filterModel.categoryId)
+);
+const knowledgeSpaces = computed(() => {
+  if (!hasActiveFilters.value && serverKnowledgeSpaces.value?.length) return serverKnowledgeSpaces.value;
+  return buildKnowledgeSpaces(baseFilteredTasks.value);
+});
+const currentSpace = computed(() => knowledgeSpaces.value.find(item => item.id === selectedSpaceId.value) || knowledgeSpaces.value[0] || null);
+const filteredTasks = computed(() => filterTasksBySpace(baseFilteredTasks.value, selectedSpaceId.value));
 
 const totalCount = computed(() => tasks.value.length);
 const completedCount = computed(() => tasks.value.filter(item => item.status === UploadStatus.Completed).length);
@@ -224,10 +248,63 @@ const indexPendingCount = computed(() =>
   ).length
 );
 
+function readSpaceOrder() {
+  try {
+    return JSON.parse(localStorage.getItem(knowledgeSpaceLayoutKey.value) || '[]') as string[];
+  } catch {
+    return [];
+  }
+}
+
+function saveSpaceOrder() {
+  localStorage.setItem(knowledgeSpaceLayoutKey.value, JSON.stringify(spaceBoardItems.value.map(item => item.id)));
+}
+
+function selectSpace(spaceId: string) {
+  selectedSpaceId.value = spaceId;
+  localStorage.setItem(selectedSpaceKey.value, spaceId);
+  const space = spaceBoardItems.value.find(item => item.id === spaceId);
+  if (space) {
+    localStorage.setItem(
+      ACTIVE_KNOWLEDGE_SPACE_KEY,
+      JSON.stringify({
+        id: space.id,
+        title: space.title,
+        knowledgeScope: space.type,
+        departmentId: space.departmentId
+      })
+    );
+  }
+}
+
+function syncSpaceBoardItems() {
+  const ordered = applySpaceLayout(knowledgeSpaces.value, readSpaceOrder());
+  spaceBoardItems.value = ordered;
+  const savedSelected = localStorage.getItem(selectedSpaceKey.value);
+  const nextSelected = ordered.some(item => item.id === selectedSpaceId.value)
+    ? selectedSpaceId.value
+    : ordered.find(item => item.id === savedSelected)?.id || ordered[0]?.id || null;
+  selectedSpaceId.value = nextSelected;
+  if (nextSelected) selectSpace(nextSelected);
+}
+
+function spaceTypeTag(space: KnowledgeSpace) {
+  if (space.type === 'PUBLIC') return { label: '公共', type: 'success' as const };
+  if (space.type === 'PRIVATE') return { label: '个人', type: 'warning' as const };
+  return { label: '部门', type: 'info' as const };
+}
+
+function formatSpaceUpdatedAt(space: KnowledgeSpace) {
+  if (!space.lastUpdatedAt) return '暂无更新';
+  return dayjs(space.lastUpdatedAt).format('YYYY-MM-DD HH:mm');
+}
+
+watch([knowledgeSpaces, knowledgeSpaceLayoutKey], syncSpaceBoardItems, { immediate: true });
+
 let indexPollTimer: ReturnType<typeof setInterval> | null = null;
 
 onMounted(async () => {
-  await Promise.all([getList(), store.refreshUploadPreflight(), store.refreshCategories()]);
+  await Promise.all([getList(), refreshKnowledgeSpaces(), store.refreshUploadPreflight(), store.refreshCategories()]);
   startIndexPolling();
 });
 
@@ -276,6 +353,23 @@ async function getList() {
   tasks.value = [...mergedServerTasks, ...localOnlyTasks];
 }
 
+async function refreshKnowledgeSpaces() {
+  const { error, data } = await request<Api.KnowledgeBase.KnowledgeSpaceSummary[]>({
+    url: '/documents/knowledge-spaces'
+  });
+  if (!error) {
+    serverKnowledgeSpaces.value = data.map(item => ({
+      ...item,
+      lastUpdatedAt: item.lastUpdatedAt
+    }));
+  }
+}
+
+async function refreshKnowledgeBaseView() {
+  await getList();
+  await refreshKnowledgeSpaces();
+}
+
 async function handleDelete(fileMd5: string) {
   const index = tasks.value.findIndex(task => task.fileMd5 === fileMd5);
 
@@ -296,6 +390,7 @@ async function handleDelete(fileMd5: string) {
     tasks.value.splice(index, 1);
     window.$message?.success('删除成功');
     await getData();
+    await refreshKnowledgeSpaces();
   }
 }
 
@@ -903,14 +998,62 @@ async function onBeforeUpload(
       </NForm>
     </NCard>
 
-    <NCard title="知识资产" :bordered="false" size="small" class="paper-card sm:flex-1-hidden card-wrapper">
+    <section class="knowledge-space-section">
+      <div class="section-title">
+        <div>
+          <strong>知识库分区</strong>
+          <span>公共知识库和部门知识库按块管理，可拖动调整顺序</span>
+        </div>
+        <NTag v-if="currentSpace" :type="spaceTypeTag(currentSpace).type" :bordered="false">
+          当前：{{ currentSpace.title }}
+        </NTag>
+      </div>
+      <VueDraggable v-model="spaceBoardItems" :animation="180" class="knowledge-space-grid" @end="saveSpaceOrder">
+        <button
+          v-for="(space, index) in spaceBoardItems"
+          :key="space.id"
+          class="knowledge-space-card"
+          :class="[space.type.toLowerCase(), `space-color-${index % 7}`, { active: selectedSpaceId === space.id }]"
+          type="button"
+          @click="selectSpace(space.id)"
+        >
+          <div class="space-card-header">
+            <span class="space-icon" :class="space.type.toLowerCase()">
+              <icon-solar:folder-with-files-bold-duotone />
+            </span>
+            <NTag size="small" :type="spaceTypeTag(space).type" :bordered="false">{{ spaceTypeTag(space).label }}</NTag>
+          </div>
+          <strong>{{ space.title }}</strong>
+          <div class="space-stats">
+            <span>
+              <b>{{ space.fileCount }}</b>
+              文件
+            </span>
+            <span>
+              <b>{{ space.indexedCount }}</b>
+              可检索
+            </span>
+            <span>
+              <b>{{ space.cleaningIssueCount }}</b>
+              清洗异常
+            </span>
+          </div>
+          <div class="space-footer">
+            <span>{{ formatSpaceUpdatedAt(space) }}</span>
+            <span v-if="space.interruptedCount">中断 {{ space.interruptedCount }}</span>
+          </div>
+        </button>
+      </VueDraggable>
+    </section>
+
+    <NCard :title="currentSpace ? `${currentSpace.title} · 文件` : '知识资产'" :bordered="false" size="small" class="paper-card sm:flex-1-hidden card-wrapper">
       <template #header-extra>
         <TableHeaderOperation
           v-model:columns="columnChecks"
           :addable="canUploadKnowledge"
           :loading="loading"
           @add="handleUpload"
-          @refresh="getList"
+          @refresh="refreshKnowledgeBaseView"
         >
           <template #prefix>
             <NPopover trigger="click" placement="bottom-start" class="upload-service-popover">
@@ -963,7 +1106,7 @@ async function onBeforeUpload(
         class="sm:h-full"
       />
     </NCard>
-    <UploadDialog v-model:visible="uploadVisible" />
+    <UploadDialog v-model:visible="uploadVisible" :initial-space="currentSpace" />
     <SearchDialog v-model:visible="searchVisible" />
 
     <NModal v-model:show="cleaningRuleVisible" preset="card" title="清洗规则集" class="paper-modal max-w-980px w-[94%]">
@@ -1243,6 +1386,331 @@ async function onBeforeUpload(
 html.dark .overview-card {
   border-color: rgb(255 255 255 / 0.08);
   box-shadow: 0 18px 40px -30px rgb(0 0 0 / 0.5);
+}
+
+.knowledge-space-section {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  overflow: hidden;
+  border: 1px solid rgb(15 23 42 / 0.1);
+  border-radius: 8px;
+  background: rgb(var(--container-bg-color));
+  padding: 16px;
+  box-shadow: 0 16px 44px -36px rgb(15 23 42 / 0.42);
+}
+
+.section-title {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.section-title > div {
+  display: grid;
+  gap: 2px;
+}
+
+.section-title strong {
+  color: rgb(25 38 44);
+  font-size: 17px;
+  line-height: 1.3;
+}
+
+.section-title span {
+  color: rgb(48 65 68 / 0.68);
+  font-size: 12px;
+}
+
+.knowledge-space-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(236px, 1fr));
+  gap: 12px;
+}
+
+.knowledge-space-card {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  min-height: 154px;
+  overflow: hidden;
+  border: 1px solid rgb(20 31 39 / 0.18);
+  border-radius: 8px;
+  background:
+    linear-gradient(145deg, rgb(255 255 255 / 0.86), rgb(238 243 242 / 0.8)),
+    rgb(255 255 255 / 0.72);
+  padding: 14px;
+  color: inherit;
+  text-align: left;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.2s ease;
+}
+
+.knowledge-space-card::before {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  content: '';
+  background:
+    repeating-linear-gradient(
+      168deg,
+      rgb(255 255 255 / 0.18) 0,
+      rgb(255 255 255 / 0.18) 5px,
+      transparent 5px,
+      transparent 18px
+    ),
+    linear-gradient(90deg, transparent, rgb(255 255 255 / 0.32), transparent);
+  opacity: 0.9;
+}
+
+.knowledge-space-card::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 44px;
+  pointer-events: none;
+  content: '';
+  background: linear-gradient(90deg, rgb(213 180 106 / 0.18), rgb(76 111 132 / 0.14), transparent);
+}
+
+.knowledge-space-card.space-color-0 {
+  background:
+    linear-gradient(145deg, #fee2e2, #fecaca 52%, #fff7f7),
+    rgb(255 255 255);
+}
+
+.knowledge-space-card.space-color-1 {
+  background:
+    linear-gradient(145deg, #ffedd5, #fed7aa 52%, #fff7ed),
+    rgb(255 255 255);
+}
+
+.knowledge-space-card.space-color-2 {
+  background:
+    linear-gradient(145deg, #fef9c3, #fde68a 52%, #fffbea),
+    rgb(255 255 255);
+}
+
+.knowledge-space-card.space-color-3 {
+  background:
+    linear-gradient(145deg, #dcfce7, #bbf7d0 52%, #f0fdf4),
+    rgb(255 255 255);
+}
+
+.knowledge-space-card.space-color-4 {
+  background:
+    linear-gradient(145deg, #dbeafe, #bfdbfe 52%, #eff6ff),
+    rgb(255 255 255);
+}
+
+.knowledge-space-card.space-color-5 {
+  background:
+    linear-gradient(145deg, #e0e7ff, #c7d2fe 52%, #eef2ff),
+    rgb(255 255 255);
+}
+
+.knowledge-space-card.space-color-6 {
+  background:
+    linear-gradient(145deg, #f3e8ff, #e9d5ff 52%, #faf5ff),
+    rgb(255 255 255);
+}
+
+.knowledge-space-card:hover,
+.knowledge-space-card.active {
+  border-color: rgb(42 76 91 / 0.62);
+  box-shadow:
+    0 22px 42px -30px rgb(30 58 70 / 0.72),
+    inset 0 0 0 1px rgb(255 255 255 / 0.5);
+  transform: translateY(-2px);
+}
+
+.knowledge-space-card.active {
+  outline: 2px solid rgb(213 180 106 / 0.42);
+  outline-offset: -4px;
+}
+
+.space-card-header,
+.space-footer {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.space-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  border: 1px solid rgb(255 255 255 / 0.64);
+  color: rgb(52 90 96);
+  background: rgb(255 255 255 / 0.46);
+  font-size: 22px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5);
+}
+
+.space-icon.public {
+  color: rgb(76 117 74);
+  background: rgb(236 247 219 / 0.72);
+}
+
+.space-icon.department {
+  color: rgb(54 94 119);
+  background: rgb(223 240 249 / 0.74);
+}
+
+.space-icon.private {
+  color: rgb(136 101 51);
+  background: rgb(251 236 207 / 0.74);
+}
+
+.knowledge-space-card strong {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: rgb(25 38 44);
+  font-size: 15px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.space-stats {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.space-stats span {
+  display: grid;
+  gap: 2px;
+  border: 1px solid rgb(255 255 255 / 0.58);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 0.5);
+  padding: 8px;
+  color: rgb(47 68 70 / 0.74);
+  font-size: 12px;
+  backdrop-filter: blur(6px);
+}
+
+.space-stats b {
+  color: rgb(28 53 60);
+  font-size: 17px;
+  line-height: 1;
+}
+
+.space-footer {
+  min-height: 20px;
+  color: rgb(59 76 76 / 0.68);
+  font-size: 12px;
+}
+
+html.dark .knowledge-space-section,
+html.dark .knowledge-space-card {
+  border-color: rgb(255 255 255 / 0.08);
+}
+
+html.dark .knowledge-space-section {
+  background:
+    linear-gradient(135deg, rgb(31 47 50 / 0.98), rgb(25 42 49 / 0.95) 48%, rgb(48 45 35 / 0.88)),
+    rgb(var(--container-bg-color));
+}
+
+html.dark .knowledge-space-section::before {
+  background:
+    repeating-linear-gradient(
+      116deg,
+      rgb(255 255 255 / 0.05) 0,
+      rgb(255 255 255 / 0.05) 2px,
+      transparent 2px,
+      transparent 12px
+    ),
+    linear-gradient(90deg, rgb(137 172 156 / 0.08), transparent 38%, rgb(220 184 121 / 0.08));
+  mix-blend-mode: screen;
+}
+
+html.dark .section-title strong,
+html.dark .knowledge-space-card strong,
+html.dark .space-stats b {
+  color: rgb(231 241 235);
+}
+
+html.dark .section-title span,
+html.dark .space-footer,
+html.dark .space-stats span {
+  color: rgb(224 235 229 / 0.72);
+}
+
+html.dark .knowledge-space-card {
+  background:
+    linear-gradient(145deg, rgb(255 255 255 / 0.08), rgb(142 178 168 / 0.1)),
+    rgb(255 255 255 / 0.04);
+}
+
+html.dark .knowledge-space-card.space-color-0 {
+  background:
+    linear-gradient(145deg, rgb(185 28 28 / 0.34), rgb(127 29 29 / 0.2) 52%, rgb(248 113 113 / 0.12)),
+    rgb(255 255 255 / 0.04);
+}
+
+html.dark .knowledge-space-card.space-color-1 {
+  background:
+    linear-gradient(145deg, rgb(194 65 12 / 0.34), rgb(124 45 18 / 0.2) 52%, rgb(251 146 60 / 0.12)),
+    rgb(255 255 255 / 0.04);
+}
+
+html.dark .knowledge-space-card.space-color-2 {
+  background:
+    linear-gradient(145deg, rgb(202 138 4 / 0.34), rgb(113 63 18 / 0.2) 52%, rgb(250 204 21 / 0.12)),
+    rgb(255 255 255 / 0.04);
+}
+
+html.dark .knowledge-space-card.space-color-3 {
+  background:
+    linear-gradient(145deg, rgb(22 163 74 / 0.32), rgb(20 83 45 / 0.2) 52%, rgb(74 222 128 / 0.12)),
+    rgb(255 255 255 / 0.04);
+}
+
+html.dark .knowledge-space-card.space-color-4 {
+  background:
+    linear-gradient(145deg, rgb(37 99 235 / 0.34), rgb(30 64 175 / 0.2) 52%, rgb(96 165 250 / 0.12)),
+    rgb(255 255 255 / 0.04);
+}
+
+html.dark .knowledge-space-card.space-color-5 {
+  background:
+    linear-gradient(145deg, rgb(79 70 229 / 0.34), rgb(49 46 129 / 0.2) 52%, rgb(129 140 248 / 0.12)),
+    rgb(255 255 255 / 0.04);
+}
+
+html.dark .knowledge-space-card.space-color-6 {
+  background:
+    linear-gradient(145deg, rgb(147 51 234 / 0.34), rgb(88 28 135 / 0.2) 52%, rgb(192 132 252 / 0.12)),
+    rgb(255 255 255 / 0.04);
+}
+
+html.dark .knowledge-space-card.active {
+  outline-color: rgb(241 211 136 / 0.42);
+}
+
+html.dark .space-stats span {
+  border-color: rgb(255 255 255 / 0.09);
+  background: rgb(255 255 255 / 0.08);
 }
 
 .upload-service-panel {

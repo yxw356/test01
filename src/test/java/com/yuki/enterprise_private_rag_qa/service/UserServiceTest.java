@@ -220,12 +220,105 @@ void testAuthenticateUser_Success() {
         assertEquals("HR", created.getPrimaryOrg());
     }
 
+    @Test
+    void superAdminCanUpdateManagedUserUsernameRoleAndDepartments() {
+        User admin = user(1L, "admin", User.Role.SUPER_ADMIN, "admin");
+        User target = user(2L, "hr", User.Role.DEPT_MEMBER, "PRIVATE_hr,HR");
+        target.setPrimaryOrg("HR");
+        when(userRepository.findByUsername("admin")).thenReturn(Optional.of(admin));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(target));
+        when(userRepository.findByUsername("hr2")).thenReturn(Optional.empty());
+        when(organizationTagRepository.existsByTagId("FIN")).thenReturn(true);
+        when(organizationTagRepository.findByTagId("PRIVATE_hr")).thenReturn(Optional.of(privateTag("PRIVATE_hr", target)));
+        when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        User updated = userService.updateManagedUser("admin", 2L, new UserService.ManagedUserUpdateRequest(
+                "hr2", User.Role.DEPT_LEAD, List.of("FIN"), "FIN"
+        ));
+
+        assertEquals("hr2", updated.getUsername());
+        assertEquals(User.Role.DEPT_LEAD, updated.getRole());
+        assertTrue(updated.getOrgTags().contains("PRIVATE_hr2"));
+        assertTrue(updated.getOrgTags().contains("FIN"));
+        assertEquals("FIN", updated.getPrimaryOrg());
+        verify(organizationTagRepository).delete(any(OrganizationTag.class));
+        verify(orgTagCacheService).deleteUserOrgTagsCache("hr");
+        verify(orgTagCacheService).deleteUserEffectiveTagsCache("hr");
+    }
+
+    @Test
+    void departmentLeadCanOnlyUpdateMemberInsideOwnDepartment() {
+        User lead = user(1L, "lead", User.Role.DEPT_LEAD, "HR");
+        User member = user(2L, "member", User.Role.DEPT_MEMBER, "PRIVATE_member,HR");
+        when(userRepository.findByUsername("lead")).thenReturn(Optional.of(lead));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(member));
+        when(orgTagCacheService.getUserEffectiveOrgTags("lead")).thenReturn(List.of("HR"));
+        when(organizationTagRepository.existsByTagId("HR")).thenReturn(true);
+        when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        User updated = userService.updateManagedUser("lead", 2L, new UserService.ManagedUserUpdateRequest(
+                "member2", User.Role.DEPT_MEMBER, List.of("HR"), "HR"
+        ));
+
+        assertEquals("member2", updated.getUsername());
+        assertEquals(User.Role.DEPT_MEMBER, updated.getRole());
+
+        CustomException exception = assertThrows(CustomException.class,
+                () -> userService.updateManagedUser("lead", 2L, new UserService.ManagedUserUpdateRequest(
+                        "member3", User.Role.DEPT_LEAD, List.of("HR"), "HR"
+                )));
+        assertEquals(HttpStatus.FORBIDDEN, exception.getStatus());
+    }
+
+    @Test
+    void superAdminCannotDeleteSelfOrAdminUser() {
+        User admin = user(1L, "admin", User.Role.SUPER_ADMIN, "admin");
+        User otherAdmin = user(2L, "root2", User.Role.SUPER_ADMIN, "admin");
+        when(userRepository.findByUsername("admin")).thenReturn(Optional.of(admin));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(admin));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(otherAdmin));
+
+        assertEquals(HttpStatus.BAD_REQUEST, assertThrows(CustomException.class,
+                () -> userService.deleteManagedUser("admin", 1L)).getStatus());
+        assertEquals(HttpStatus.BAD_REQUEST, assertThrows(CustomException.class,
+                () -> userService.deleteManagedUser("admin", 2L)).getStatus());
+    }
+
+    @Test
+    void superAdminCanDeleteDepartmentMember() {
+        User admin = user(1L, "admin", User.Role.SUPER_ADMIN, "admin");
+        User member = user(2L, "member", User.Role.DEPT_MEMBER, "PRIVATE_member,HR");
+        when(userRepository.findByUsername("admin")).thenReturn(Optional.of(admin));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(member));
+        when(organizationTagRepository.findByTagId("PRIVATE_member")).thenReturn(Optional.of(privateTag("PRIVATE_member", member)));
+
+        userService.deleteManagedUser("admin", 2L);
+
+        verify(organizationTagRepository).delete(any(OrganizationTag.class));
+        verify(userRepository).delete(member);
+        verify(orgTagCacheService).deleteUserOrgTagsCache("member");
+        verify(orgTagCacheService).deleteUserEffectiveTagsCache("member");
+    }
+
     private User user(String username, User.Role role, String orgTags) {
+        return user(null, username, role, orgTags);
+    }
+
+    private User user(Long id, String username, User.Role role, String orgTags) {
         User user = new User();
+        user.setId(id);
         user.setUsername(username);
         user.setRole(role);
         user.setOrgTags(orgTags);
         user.setPrimaryOrg(orgTags == null || orgTags.isBlank() ? null : orgTags.split(",")[0]);
         return user;
+    }
+
+    private OrganizationTag privateTag(String tagId, User owner) {
+        OrganizationTag tag = new OrganizationTag();
+        tag.setTagId(tagId);
+        tag.setName(owner.getUsername() + "的私人空间");
+        tag.setCreatedBy(owner);
+        return tag;
     }
 }
