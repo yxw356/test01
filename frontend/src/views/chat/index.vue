@@ -1,6 +1,20 @@
 <script setup lang="ts">
+import { ACTIVE_KNOWLEDGE_SPACE_KEY } from '@/views/knowledge-base/utils/knowledge-space';
 import ChatList from './modules/chat-list.vue';
 import InputBox from './modules/input-box.vue';
+
+const activeSpaceTitle = ref('全部可访问知识');
+
+function refreshActiveSpaceTitle() {
+  try {
+    const context = JSON.parse(localStorage.getItem(ACTIVE_KNOWLEDGE_SPACE_KEY) || '{}');
+    activeSpaceTitle.value = context.title || '全部可访问知识';
+  } catch {
+    activeSpaceTitle.value = '全部可访问知识';
+  }
+}
+
+onMounted(refreshActiveSpaceTitle);
 </script>
 
 <template>
@@ -11,13 +25,14 @@ import InputBox from './modules/input-box.vue';
           <span class="header-mark flex-center">
             <icon-solar:database-bold-duotone class="text-20px text-primary" />
           </span>
-          <h1 class="m-0 truncate text-18px font-600">RAG 问答工作台</h1>
+          <h1 class="m-0 truncate text-18px font-600">龙汇QA 问答工作台</h1>
         </div>
         <p class="m-0 mt-1 text-13px color-[rgb(var(--base-text-color)/0.58)]">
-          面向企业制度、流程、项目资料的私有知识库问答
+          面向龙汇内部制度、流程、项目资料的知识库问答
         </p>
       </div>
       <div class="header-tags flex flex-wrap justify-end gap-2 lt-sm:hidden">
+        <NTag :bordered="false" size="small" type="warning">范围：{{ activeSpaceTitle }}</NTag>
         <NTag :bordered="false" size="small">权限隔离</NTag>
         <NTag :bordered="false" size="small" type="info">混合检索</NTag>
         <NTag :bordered="false" size="small" type="success">来源追溯</NTag>

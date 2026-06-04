@@ -1,6 +1,6 @@
 const local: App.I18n.Schema = {
   system: {
-    title: 'QA',
+    title: '龙汇QA',
     updateTitle: 'System Version Update Notification',
     updateContent: 'A new version of the system has been detected. Do you want to refresh the page immediately?',
     updateConfirm: 'Refresh immediately',
@@ -165,8 +165,8 @@ const local: App.I18n.Schema = {
     chat: 'Chat Assistant',
     'chat-history': 'Chat History',
     'knowledge-base': 'Knowledge Base',
-    'org-tag': 'Organization Tag',
-    'admin-audit': 'Audit Logs',
+    'org-tag': 'Departments',
+    'admin-audit': 'Operation Logs',
     'admin-monitoring': 'Monitoring',
     user: 'User Management',
     'personal-center': 'Personal Center'

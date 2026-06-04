@@ -22,6 +22,10 @@ public class EsDocument {
     private String modelVersion;   // 向量生成模型版本
     private String userId;         // 上传用户ID
     private String orgTag;         // 组织标签
+    private String knowledgeScope; // 知识范围
+    private String departmentId;   // 所属部门
+    private Long categoryId;       // 知识分类ID
+    private String categoryName;   // 知识分类名称
     /** 使用包装类型，避免 Jackson 将 isPublic 映射为 JSON 字段 public */
     @JsonProperty("isPublic")
     private Boolean isPublic;      // 是否公开
@@ -47,6 +51,21 @@ public class EsDocument {
     public EsDocument(String id, String fileMd5, int chunkId, String parentId, String content,
                      String parentTextContent, float[] vector, String modelVersion,
                      String userId, String orgTag, boolean isPublic) {
+        this(id, fileMd5, chunkId, parentId, content, parentTextContent, vector, modelVersion,
+                userId, orgTag, isPublic, isPublic ? "PUBLIC" : "DEPARTMENT", orgTag, null, null);
+    }
+
+    public EsDocument(String id, String fileMd5, int chunkId, String parentId, String content,
+                     String parentTextContent, float[] vector, String modelVersion,
+                     String userId, String orgTag, boolean isPublic, String knowledgeScope, String departmentId) {
+        this(id, fileMd5, chunkId, parentId, content, parentTextContent, vector, modelVersion,
+                userId, orgTag, isPublic, knowledgeScope, departmentId, null, null);
+    }
+
+    public EsDocument(String id, String fileMd5, int chunkId, String parentId, String content,
+                     String parentTextContent, float[] vector, String modelVersion,
+                     String userId, String orgTag, boolean isPublic, String knowledgeScope, String departmentId,
+                     Long categoryId, String categoryName) {
         this.id = id;
         this.fileMd5 = fileMd5;
         this.chunkId = chunkId;
@@ -58,6 +77,10 @@ public class EsDocument {
         this.userId = userId;
         this.orgTag = orgTag;
         this.isPublic = isPublic;
+        this.knowledgeScope = knowledgeScope;
+        this.departmentId = departmentId;
+        this.categoryId = categoryId;
+        this.categoryName = categoryName;
     }
     
 

@@ -7,7 +7,7 @@ defineOptions({
 <template>
   <DarkModeContainer class="h-full flex-center">
     <a href="https://github.com/Yukigithubycf/enterprise-private-rag-qa.git" target="_blank" rel="noopener noreferrer">
-      Copyright MIT © 2025 Enterprise Knowledge Hub
+      Copyright MIT © 2025 龙汇QA
     </a>
   </DarkModeContainer>
 </template>

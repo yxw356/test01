@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ACTIVE_KNOWLEDGE_SPACE_KEY } from '@/views/knowledge-base/utils/knowledge-space';
+
 const chatStore = useChatStore();
 const authStore = useAuthStore();
 const { input, list, wsStatus, wsData } = storeToRefs(chatStore);
@@ -91,9 +93,24 @@ const handleSend = async () => {
     status: 'pending',
     timestamp: new Date().toISOString()
   });
-  chatStore.wsSend(question);
+  chatStore.wsSend(JSON.stringify({ type: 'chat', message: question, ...activeKnowledgeSpaceContext() }));
   chatStore.scrollToBottom?.();
 };
+
+function activeKnowledgeSpaceContext() {
+  try {
+    const context = JSON.parse(localStorage.getItem(ACTIVE_KNOWLEDGE_SPACE_KEY) || '{}');
+    return {
+      knowledgeScope: context.knowledgeScope || null,
+      departmentId: context.departmentId || null
+    };
+  } catch {
+    return {
+      knowledgeScope: null,
+      departmentId: null
+    };
+  }
+}
 
 const inputRef = ref();
 // 手动插入换行符（确保所有浏览器兼容）
@@ -131,14 +148,14 @@ const handShortcut = (e: KeyboardEvent) => {
     <div class="mb-3 flex items-center justify-between gap-3">
       <div class="flex items-center gap-2 text-13px color-[rgb(var(--base-text-color)/0.62)]">
         <icon-solar:shield-check-bold-duotone class="text-18px text-primary" />
-        <span>私有知识库安全检索</span>
+        <span>龙汇QA 安全检索</span>
       </div>
       <NTag :bordered="false" size="small" type="info">RAG</NTag>
     </div>
     <textarea
       ref="inputRef"
       v-model.trim="input.message"
-      placeholder="向企业知识库提问，例如：总结销售合同审批流程"
+      placeholder="向龙汇QA提问，例如：总结销售合同审批流程"
       class="chat-input min-h-10 w-full cursor-text resize-none b-none bg-transparent caret-[rgb(var(--primary-color))] outline-none"
       @keydown="handShortcut"
     />

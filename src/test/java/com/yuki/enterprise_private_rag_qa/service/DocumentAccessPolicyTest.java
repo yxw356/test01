@@ -19,6 +19,24 @@ class DocumentAccessPolicyTest {
     }
 
     @Test
+    void publicKnowledgeScopeAccessibleEvenWhenLegacyPublicFlagIsFalse() {
+        assertTrue(DocumentAccessPolicy.canAccess(
+                "1", "ORG_A", false, "PUBLIC", "ORG_A", "2", List.of("ORG_B")));
+    }
+
+    @Test
+    void sameDepartmentIdCanAccessDepartmentKnowledgeEvenWhenLegacyOrgTagDiffers() {
+        assertTrue(DocumentAccessPolicy.canAccess(
+                "1", "OLD_TAG", false, "DEPARTMENT", "FIN", "2", List.of("FIN")));
+    }
+
+    @Test
+    void differentDepartmentIdCannotAccessDepartmentKnowledge() {
+        assertFalse(DocumentAccessPolicy.canAccess(
+                "1", "OLD_TAG", false, "DEPARTMENT", "FIN", "2", List.of("OPS")));
+    }
+
+    @Test
     void sameOrgCanAccessPrivateDocument() {
         assertTrue(DocumentAccessPolicy.canAccess("1", "ORG_A", false, "2", List.of("ORG_A")));
     }

@@ -4,8 +4,121 @@ import { nanoid } from '~/packages/utils/src';
 export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () => {
   const tasks = ref<Api.KnowledgeBase.UploadTask[]>([]);
   const activeUploads = ref<Set<string>>(new Set());
+  const uploadPreflight = ref<Api.KnowledgeBase.UploadPreflight | null>(null);
+  const uploadPreflightLoading = ref(false);
+  const categories = ref<Api.KnowledgeBase.Category[]>([]);
+  const categoryLoading = ref(false);
+  const cleaningRuleSets = ref<Api.KnowledgeBase.CleaningRuleSet[]>([]);
+  const cleaningRuleSetLoading = ref(false);
+
+  function resetStore() {
+    tasks.value = [];
+    activeUploads.value.clear();
+  }
+
+  async function refreshUploadPreflight() {
+    uploadPreflightLoading.value = true;
+    const { error, data } = await request<Api.KnowledgeBase.UploadPreflight>({
+      url: '/upload/preflight'
+    });
+    uploadPreflightLoading.value = false;
+    if (error) return null;
+
+    uploadPreflight.value = data;
+    return data;
+  }
+
+  async function checkUploadPreflight() {
+    const data = await refreshUploadPreflight();
+    if (!data) return false;
+
+    if (!data.ready) {
+      window.$message?.warning(data.message || '上传依赖未启动');
+      return false;
+    }
+
+    return true;
+  }
+
+  async function refreshCategories() {
+    categoryLoading.value = true;
+    const { error, data } = await request<Api.KnowledgeBase.Category[]>({
+      url: '/knowledge-categories'
+    });
+    categoryLoading.value = false;
+    if (!error) categories.value = data;
+    return !error;
+  }
+
+  async function createCategory(form: Api.KnowledgeBase.CategoryCreateForm) {
+    const { error } = await request<Api.KnowledgeBase.Category>({
+      url: '/knowledge-categories',
+      method: 'POST',
+      data: form
+    });
+    if (error) return false;
+    await refreshCategories();
+    return true;
+  }
+
+  async function refreshCleaningRuleSets() {
+    cleaningRuleSetLoading.value = true;
+    const { error, data } = await request<Api.KnowledgeBase.CleaningRuleSet[]>({
+      url: '/data-cleaning/rule-sets'
+    });
+    cleaningRuleSetLoading.value = false;
+    if (!error) cleaningRuleSets.value = data;
+    return !error;
+  }
+
+  async function createCleaningRuleSet(form: Api.KnowledgeBase.CleaningRuleSetCreateForm) {
+    const { error } = await request<Api.KnowledgeBase.CleaningRuleSet>({
+      url: '/data-cleaning/rule-sets',
+      method: 'POST',
+      data: form
+    });
+    if (error) return false;
+    await refreshCleaningRuleSets();
+    return true;
+  }
+
+  async function updateCleaningRuleSet(ruleSetId: number, form: Api.KnowledgeBase.CleaningRuleSetCreateForm) {
+    const { error } = await request<Api.KnowledgeBase.CleaningRuleSet>({
+      url: `/data-cleaning/rule-sets/${ruleSetId}`,
+      method: 'PUT',
+      data: form
+    });
+    if (error) return false;
+    await refreshCleaningRuleSets();
+    return true;
+  }
+
+  async function disableCleaningRuleSet(ruleSetId: number) {
+    const { error } = await request({
+      url: `/data-cleaning/rule-sets/${ruleSetId}`,
+      method: 'DELETE'
+    });
+    if (error) return false;
+    await refreshCleaningRuleSets();
+    return true;
+  }
+
+  async function previewCleaning(form: Api.KnowledgeBase.CleaningPreviewRequest) {
+    const { error, data } = await request<Api.KnowledgeBase.CleaningPreviewResult>({
+      url: '/data-cleaning/preview',
+      method: 'POST',
+      data: form
+    });
+    if (error) return null;
+    return data;
+  }
 
   async function uploadChunk(task: Api.KnowledgeBase.UploadTask): Promise<boolean> {
+    if (!task.file) {
+      task.uploadError = '请重新选择原文件后再续传';
+      return false;
+    }
+
     const totalChunks = Math.ceil(task.totalSize / chunkSize);
 
     const chunkStart = task.chunkIndex * chunkSize;
@@ -26,6 +139,10 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
         totalSize: task.totalSize,
         fileName: task.fileName,
         orgTag: task.orgTag,
+        knowledgeScope: task.knowledgeScope,
+        departmentId: task.departmentId,
+        categoryId: task.categoryId,
+        cleaningRuleSetId: task.cleaningRuleSetId,
         isPublic: task.isPublic ?? false
       },
       headers: {
@@ -37,7 +154,10 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
 
     task.requestIds = task.requestIds.filter(id => id !== requestId);
 
-    if (error) return false;
+    if (error) {
+      task.uploadError = error.response?.data?.message || error.message || '分片上传失败';
+      return false;
+    }
 
     // 更新任务状态
     const updatedTask = tasks.value.find(t => t.fileMd5 === task.fileMd5)!;
@@ -56,7 +176,7 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
       const { error } = await request({
         url: '/upload/merge',
         method: 'POST',
-        data: { fileMd5: task.fileMd5, fileName: task.fileName }
+        data: { fileMd5: task.fileMd5, fileName: task.fileName, cleaningRuleSetId: task.cleaningRuleSetId ?? null }
       });
       if (error) return false;
 
@@ -94,6 +214,9 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
         window.$message?.error('文件正在上传中');
         return;
       } else if (existingTask.status === UploadStatus.Break) {
+        existingTask.file = file;
+        existingTask.cleaningRuleSetId = form.cleaningRuleSetId;
+        existingTask.uploadError = undefined;
         existingTask.status = UploadStatus.Pending;
         startUpload();
         return;
@@ -110,10 +233,18 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
       totalSize: file.size,
       public: form.isPublic,
       isPublic: form.isPublic,
+      canView: true,
+      canManage: true,
+      knowledgeScope: form.knowledgeScope,
+      departmentId: form.departmentId,
+      categoryId: form.categoryId,
+      categoryName: form.categoryName,
+      cleaningRuleSetId: form.cleaningRuleSetId,
+      cleaningStatus: 'PENDING',
       uploadedChunks: [],
       progress: 0,
       status: UploadStatus.Pending,
-      orgTag: form.orgTag
+      orgTag: form.departmentId || form.orgTag
     };
 
     newTask.orgTagName = form.orgTagName ?? null;
@@ -139,7 +270,14 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
 
     // 获取第一个待上传的文件
     const task = pendingTasks[0];
+    if (!task.file) {
+      task.status = UploadStatus.Break;
+      task.uploadError = '请重新选择原文件后再续传';
+      return;
+    }
+
     task.status = UploadStatus.Uploading;
+    task.uploadError = undefined;
     activeUploads.value.add(task.fileMd5);
 
     // 计算文件总片数
@@ -167,7 +305,11 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
       console.error('%c [ 👉 upload error 👈 ]-168', 'font-size:16px; background:#94cc97; color:#d8ffdb;', e);
       // 如果上传失败，则将任务状态设置为中断
       const index = tasks.value.findIndex(t => t.fileMd5 === task.fileMd5);
-      tasks.value[index].status = UploadStatus.Break;
+      if (index !== -1) {
+        tasks.value[index].status = UploadStatus.Break;
+        tasks.value[index].uploadError ||= e instanceof Error ? e.message : '上传中断';
+        window.$message?.error(tasks.value[index].uploadError || '上传中断');
+      }
     } finally {
       // 无论成功或失败，都从活跃队列中移除
       activeUploads.value.delete(task.fileMd5);
@@ -179,6 +321,22 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
   return {
     tasks,
     activeUploads,
+    uploadPreflight,
+    uploadPreflightLoading,
+    categories,
+    categoryLoading,
+    cleaningRuleSets,
+    cleaningRuleSetLoading,
+    resetStore,
+    refreshUploadPreflight,
+    checkUploadPreflight,
+    refreshCategories,
+    createCategory,
+    refreshCleaningRuleSets,
+    createCleaningRuleSet,
+    updateCleaningRuleSet,
+    disableCleaningRuleSet,
+    previewCleaning,
     enqueueUpload,
     startUpload
   };

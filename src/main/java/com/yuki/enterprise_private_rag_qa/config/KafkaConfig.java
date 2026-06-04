@@ -88,7 +88,9 @@ public class KafkaConfig {
     @Bean
     public ConcurrentKafkaListenerContainerFactory<String, Object> kafkaListenerContainerFactory(
             ConsumerFactory<String, Object> consumerFactory,
-            KafkaTemplate<String, Object> kafkaTemplate) {
+            KafkaTemplate<String, Object> kafkaTemplate,
+            @Value("${spring.kafka.listener.auto-startup:true}") boolean kafkaListenerAutoStartup,
+            @Value("${spring.kafka.listener.concurrency:1}") int kafkaListenerConcurrency) {
         // 当重试失败后，消息发送至 file-processing-dlt 主题，分区与原消息保持一致
         DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(
                 kafkaTemplate,
@@ -100,6 +102,8 @@ public class KafkaConfig {
         ConcurrentKafkaListenerContainerFactory<String, Object> factory = new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory);
         factory.setCommonErrorHandler(errorHandler);
+        factory.setAutoStartup(kafkaListenerAutoStartup);
+        factory.setConcurrency(Math.max(1, kafkaListenerConcurrency));
         return factory;
     }
 }

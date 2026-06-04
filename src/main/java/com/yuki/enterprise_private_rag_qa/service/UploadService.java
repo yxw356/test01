@@ -46,6 +46,9 @@ public class UploadService {
     private ChunkInfoRepository chunkInfoRepository;
 
     @Autowired
+    private KnowledgeSpaceService knowledgeSpaceService;
+
+    @Autowired
     private String minioPublicUrl; // 注入 MinIO 的公共访问地址
 
     /**
@@ -61,8 +64,10 @@ public class UploadService {
      * @param userId 上传用户ID
      * @throws IOException 如果文件读取失败
      */
-    public void uploadChunk(String fileMd5, int chunkIndex, long totalSize, String fileName, 
-                           MultipartFile file, String orgTag, boolean isPublic, String userId) throws IOException {
+    public void uploadChunk(String fileMd5, int chunkIndex, long totalSize, String fileName,
+                           MultipartFile file, String orgTag, boolean isPublic, String userId,
+                           FileUpload.KnowledgeScope knowledgeScope, String departmentId,
+                           Long categoryId, String categoryName, Long cleaningRuleSetId) throws IOException {
         // 获取文件类型信息
         String fileType = getFileType(fileName);
         String contentType = file.getContentType();
@@ -87,6 +92,12 @@ public class UploadService {
                 fileUpload.setUserId(userId); // 设置上传用户ID
                 fileUpload.setOrgTag(orgTag); // 设置组织标签
                 fileUpload.setPublic(isPublic); // 设置是否公开
+                fileUpload.setKnowledgeScope(knowledgeScope);
+                fileUpload.setDepartmentId(departmentId);
+                fileUpload.setCategoryId(categoryId);
+                fileUpload.setCategoryName(categoryName);
+                fileUpload.setCleaningRuleSetId(cleaningRuleSetId);
+                fileUpload.setSpaceId(knowledgeSpaceService.ensureSpaceForDocument(fileUpload));
                 try {
                     fileUploadRepository.save(fileUpload);
                     logger.info("文件记录创建成功 => fileMd5: {}, fileName: {}, fileType: {}", fileMd5, fileName, fileType);
@@ -94,6 +105,13 @@ public class UploadService {
                     logger.error("创建文件记录失败 => fileMd5: {}, fileName: {}, fileType: {}, 错误: {}", fileMd5, fileName, fileType, e.getMessage(), e);
                     throw new RuntimeException("创建文件记录失败: " + e.getMessage(), e);
                 }
+            } else if (cleaningRuleSetId != null) {
+                fileUploadRepository.findByFileMd5AndUserId(fileMd5, userId).ifPresent(existing -> {
+                    if (existing.getCleaningRuleSetId() == null) {
+                        existing.setCleaningRuleSetId(cleaningRuleSetId);
+                        fileUploadRepository.save(existing);
+                    }
+                });
             }
 
             // 检查分片是否已经上传

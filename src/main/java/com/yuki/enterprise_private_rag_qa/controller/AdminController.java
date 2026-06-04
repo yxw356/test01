@@ -9,6 +9,8 @@ import com.yuki.enterprise_private_rag_qa.model.User;
 import com.yuki.enterprise_private_rag_qa.repository.OrganizationTagRepository;
 import com.yuki.enterprise_private_rag_qa.repository.UserRepository;
 import com.yuki.enterprise_private_rag_qa.service.ConversationService;
+import com.yuki.enterprise_private_rag_qa.service.FilePermissionAction;
+import com.yuki.enterprise_private_rag_qa.service.RoleFilePermissionService;
 import com.yuki.enterprise_private_rag_qa.service.UserService;
 import com.yuki.enterprise_private_rag_qa.utils.JwtUtils;
 import com.yuki.enterprise_private_rag_qa.utils.LogUtils;
@@ -50,6 +52,9 @@ public class AdminController {
 
     @Autowired
     private ConversationService conversationService;
+
+    @Autowired
+    private RoleFilePermissionService roleFilePermissionService;
 
     /**
      * 获取所有用户列表
@@ -225,6 +230,93 @@ public class AdminController {
                     .body(Map.of("code", 500, "message", "创建管理员用户失败: " + e.getMessage()));
         }
     }
+
+    @PostMapping("/users")
+    public ResponseEntity<?> createManagedUser(
+            @RequestHeader("Authorization") String token,
+            @RequestBody ManagedUserRequest request) {
+
+        String operatorUsername = jwtUtils.extractUsernameFromToken(token.replace("Bearer ", ""));
+        validateUserManager(operatorUsername);
+
+        try {
+            User created = userService.createManagedUser(operatorUsername, new UserService.ManagedUserRequest(
+                    request.username(),
+                    request.password(),
+                    request.role(),
+                    request.orgTags() == null ? List.of() : request.orgTags(),
+                    request.primaryOrg()
+            ));
+            Map<String, Object> data = new HashMap<>();
+            data.put("userId", created.getId());
+            data.put("username", created.getUsername());
+            data.put("role", created.getRole().name());
+            data.put("orgTags", created.getOrgTags());
+            data.put("primaryOrg", created.getPrimaryOrg());
+            return ResponseEntity.ok(Map.of("code", 200, "message", "账号创建成功", "data", data));
+        } catch (CustomException e) {
+            LogUtils.logBusinessError("ADMIN_CREATE_MANAGED_USER", operatorUsername, "创建账号失败: %s", e, e.getMessage());
+            return ResponseEntity.status(e.getStatus()).body(Map.of("code", e.getStatus().value(), "message", e.getMessage()));
+        } catch (Exception e) {
+            LogUtils.logBusinessError("ADMIN_CREATE_MANAGED_USER", operatorUsername, "创建账号异常: %s", e, e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("code", 500, "message", "创建账号失败: " + e.getMessage()));
+        }
+    }
+
+    @PutMapping("/users/{userId}")
+    public ResponseEntity<?> updateManagedUser(
+            @RequestHeader("Authorization") String token,
+            @PathVariable Long userId,
+            @RequestBody ManagedUserUpdateRequest request) {
+
+        String operatorUsername = jwtUtils.extractUsernameFromToken(token.replace("Bearer ", ""));
+        validateUserManager(operatorUsername);
+
+        try {
+            User updated = userService.updateManagedUser(operatorUsername, userId, new UserService.ManagedUserUpdateRequest(
+                    request.username(),
+                    request.role(),
+                    request.orgTags() == null ? List.of() : request.orgTags(),
+                    request.primaryOrg()
+            ));
+            Map<String, Object> data = new HashMap<>();
+            data.put("userId", updated.getId());
+            data.put("username", updated.getUsername());
+            data.put("role", updated.getRole().name());
+            data.put("orgTags", updated.getOrgTags());
+            data.put("primaryOrg", updated.getPrimaryOrg());
+            return ResponseEntity.ok(Map.of("code", 200, "message", "账号更新成功", "data", data));
+        } catch (CustomException e) {
+            LogUtils.logBusinessError("ADMIN_UPDATE_MANAGED_USER", operatorUsername, "更新账号失败: %s", e, e.getMessage());
+            return ResponseEntity.status(e.getStatus()).body(Map.of("code", e.getStatus().value(), "message", e.getMessage()));
+        } catch (Exception e) {
+            LogUtils.logBusinessError("ADMIN_UPDATE_MANAGED_USER", operatorUsername, "更新账号异常: %s", e, e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("code", 500, "message", "更新账号失败: " + e.getMessage()));
+        }
+    }
+
+    @DeleteMapping("/users/{userId}")
+    public ResponseEntity<?> deleteManagedUser(
+            @RequestHeader("Authorization") String token,
+            @PathVariable Long userId) {
+
+        String operatorUsername = jwtUtils.extractUsernameFromToken(token.replace("Bearer ", ""));
+        validateUserManager(operatorUsername);
+
+        try {
+            userService.deleteManagedUser(operatorUsername, userId);
+            return ResponseEntity.ok(Map.of("code", 200, "message", "账号删除成功"));
+        } catch (CustomException e) {
+            LogUtils.logBusinessError("ADMIN_DELETE_MANAGED_USER", operatorUsername, "删除账号失败: %s", e, e.getMessage());
+            return ResponseEntity.status(e.getStatus()).body(Map.of("code", e.getStatus().value(), "message", e.getMessage()));
+        } catch (Exception e) {
+            LogUtils.logBusinessError("ADMIN_DELETE_MANAGED_USER", operatorUsername, "删除账号异常: %s", e, e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("code", 500, "message", "删除账号失败: " + e.getMessage()));
+        }
+    }
     
     /**
      * 创建组织标签
@@ -296,6 +388,80 @@ public class AdminController {
             LogUtils.logBusinessError("ADMIN_ASSIGN_ORG_TAGS", adminUsername, "分配组织标签异常: %s", e, e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("code", 500, "message", "分配组织标签失败: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * 更新用户角色
+     */
+    @PutMapping("/users/{userId}/role")
+    public ResponseEntity<?> updateUserRole(
+            @RequestHeader("Authorization") String token,
+            @PathVariable Long userId,
+            @RequestBody AssignUserRoleRequest request) {
+
+        String adminUsername = jwtUtils.extractUsernameFromToken(token.replace("Bearer ", ""));
+        validateAdmin(adminUsername);
+
+        try {
+            userService.assignRoleToUser(userId, request.role(), adminUsername);
+            return ResponseEntity.ok(Map.of("code", 200, "message", "用户角色更新成功"));
+        } catch (CustomException e) {
+            LogUtils.logBusinessError("ADMIN_ASSIGN_USER_ROLE", adminUsername, "更新用户角色失败: %s", e, e.getMessage());
+            return ResponseEntity.status(e.getStatus()).body(Map.of("code", e.getStatus().value(), "message", e.getMessage()));
+        } catch (Exception e) {
+            LogUtils.logBusinessError("ADMIN_ASSIGN_USER_ROLE", adminUsername, "更新用户角色异常: %s", e, e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("code", 500, "message", "更新用户角色失败: " + e.getMessage()));
+        }
+    }
+
+    @GetMapping("/role-file-permissions/{role}")
+    public ResponseEntity<?> getRoleFilePermissions(
+            @RequestHeader("Authorization") String token,
+            @PathVariable String role) {
+        String adminUsername = jwtUtils.extractUsernameFromToken(token.replace("Bearer ", ""));
+        validateAdmin(adminUsername);
+
+        try {
+            User.Role targetRole = User.Role.valueOf(role);
+            List<Map<String, Object>> permissions = roleFilePermissionService.listEffectivePermissions(targetRole).stream()
+                    .map(item -> {
+                        Map<String, Object> dto = new HashMap<>();
+                        dto.put("action", item.action().name());
+                        dto.put("allowed", item.allowed());
+                        dto.put("configured", item.configured());
+                        return dto;
+                    })
+                    .collect(Collectors.toList());
+            return ResponseEntity.ok(Map.of("code", 200, "message", "获取角色文件权限成功", "data", permissions));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("code", 400, "message", "无效角色: " + role));
+        } catch (CustomException e) {
+            return ResponseEntity.status(e.getStatus()).body(Map.of("code", e.getStatus().value(), "message", e.getMessage()));
+        }
+    }
+
+    @PutMapping("/role-file-permissions/{role}")
+    public ResponseEntity<?> updateRoleFilePermissions(
+            @RequestHeader("Authorization") String token,
+            @PathVariable String role,
+            @RequestBody RoleFilePermissionUpdateRequest request) {
+        String adminUsername = jwtUtils.extractUsernameFromToken(token.replace("Bearer ", ""));
+        try {
+            validateAdmin(adminUsername);
+            User.Role targetRole = User.Role.valueOf(role);
+            List<RoleFilePermissionService.PermissionUpdate> updates = request.permissions().stream()
+                    .map(item -> new RoleFilePermissionService.PermissionUpdate(item.action(), item.allowed()))
+                    .collect(Collectors.toList());
+            roleFilePermissionService.updateRolePermissions(targetRole, updates);
+            return ResponseEntity.ok(Map.of("code", 200, "message", "角色文件权限已更新"));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("code", 400, "message", "无效角色或权限点: " + role));
+        } catch (CustomException e) {
+            return ResponseEntity.status(e.getStatus()).body(Map.of("code", e.getStatus().value(), "message", e.getMessage()));
         }
     }
     
@@ -391,15 +557,16 @@ public class AdminController {
             @RequestHeader("Authorization") String token,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) String orgTag,
+            @RequestParam(required = false) String role,
             @RequestParam(required = false) Integer status,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         
         String adminUsername = jwtUtils.extractUsernameFromToken(token.replace("Bearer ", ""));
-        validateAdmin(adminUsername);
+        validateUserManager(adminUsername);
         
         try {
-            Map<String, Object> usersData = userService.getUserList(keyword, orgTag, status, page, size);
+            Map<String, Object> usersData = userService.getUserList(adminUsername, keyword, orgTag, role, status, page, size);
             return ResponseEntity.ok(Map.of(
                 "code", 200, 
                 "message", "获取用户列表成功", 
@@ -589,11 +756,26 @@ public class AdminController {
         User admin = userRepository.findByUsername(username)
                 .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
         
-        if (admin.getRole() != User.Role.ADMIN) {
+        if (!admin.isSuperAdmin()) {
             throw new CustomException("Unauthorized access: Admin role required", HttpStatus.FORBIDDEN);
         }
         
         return admin;
+    }
+
+    private User validateUserManager(String username) {
+        if (username == null || username.isEmpty()) {
+            throw new CustomException("Invalid token", HttpStatus.UNAUTHORIZED);
+        }
+
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
+
+        if (!user.isSuperAdmin() && !user.isDepartmentLead()) {
+            throw new CustomException("Unauthorized access: user management role required", HttpStatus.FORBIDDEN);
+        }
+
+        return user;
     }
 }
 
@@ -601,6 +783,21 @@ public class AdminController {
  * 管理员用户请求体
  */
 record AdminUserRequest(String username, String password) {}
+
+record ManagedUserRequest(
+        String username,
+        String password,
+        User.Role role,
+        List<String> orgTags,
+        String primaryOrg
+) {}
+
+record ManagedUserUpdateRequest(
+        String username,
+        User.Role role,
+        List<String> orgTags,
+        String primaryOrg
+) {}
 
 /**
  * 组织标签请求体
@@ -611,6 +808,15 @@ record OrgTagRequest(String tagId, String name, String description, String paren
  * 分配组织标签请求体
  */
 record AssignOrgTagsRequest(List<String> orgTags) {}
+
+/**
+ * 分配用户角色请求体
+ */
+record AssignUserRoleRequest(String role) {}
+
+record RoleFilePermissionItem(FilePermissionAction action, boolean allowed) {}
+
+record RoleFilePermissionUpdateRequest(List<RoleFilePermissionItem> permissions) {}
 
 // 添加组织标签更新请求记录类
 record OrgTagUpdateRequest(String name, String description, String parentTag) {} 

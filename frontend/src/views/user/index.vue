@@ -1,12 +1,28 @@
 <script setup lang="tsx">
-import { NButton, NTag } from 'naive-ui';
+import { NButton, NPopconfirm, NSpace, NTag } from 'naive-ui';
 import UserSearch from './modules/user-search.vue';
 import OrgTagSettingDialog from './modules/org-tag-setting-dialog.vue';
+import UserCreateDialog from './modules/user-create-dialog.vue';
 
 const appStore = useAppStore();
+const authStore = useAuthStore();
 
 function apiFn(params: Api.User.SearchParams) {
   return request<Api.User.List>({ url: '/admin/users/list', params });
+}
+
+const roleMeta: Record<Api.Auth.UserInfo['role'], { label: string; type: 'default' | 'success' | 'warning' | 'error' | 'info' }> = {
+  USER: { label: '普通用户', type: 'default' },
+  DEPT_MEMBER: { label: '部门成员', type: 'info' },
+  DEPT_LEAD: { label: '部门负责人', type: 'success' },
+  KNOWLEDGE_ADMIN: { label: '知识管理员', type: 'warning' },
+  SUPER_ADMIN: { label: '超级管理员', type: 'error' },
+  ADMIN: { label: '超级管理员(兼容)', type: 'error' }
+};
+
+function canDeleteAccount(row: Api.User.Item) {
+  if (String(row.userId) === String(authStore.userInfo.id) || row.username === authStore.userInfo.username) return false;
+  return !['ADMIN', 'SUPER_ADMIN'].includes(row.role);
 }
 
 const { columns, columnChecks, data, getData, loading, mobilePagination, searchParams, resetSearchParams } = useTable({
@@ -14,6 +30,7 @@ const { columns, columnChecks, data, getData, loading, mobilePagination, searchP
   apiParams: {
     keyword: null,
     orgTag: null,
+    role: null,
     status: null
   },
   columns: () => [
@@ -28,8 +45,17 @@ const { columns, columnChecks, data, getData, loading, mobilePagination, searchP
       minWidth: 100
     },
     {
+      key: 'role',
+      title: '角色',
+      width: 150,
+      render: row => {
+        const meta = roleMeta[row.role] || roleMeta.USER;
+        return <NTag type={meta.type}>{meta.label}</NTag>;
+      }
+    },
+    {
       key: 'orgTags',
-      title: '标签',
+      title: '所属部门',
       render: row => (
         <div class="flex flex-wrap gap-2">
           {row.orgTags.map(tag => (
@@ -55,7 +81,7 @@ const { columns, columnChecks, data, getData, loading, mobilePagination, searchP
       key: 'createTime',
       title: '创建时间',
       width: 200,
-      render: row => dayjs(row.createTime).format('YYYY-MM-DD HH:mm:ss')
+      render: row => (row.createTime || row.createdAt ? dayjs(row.createTime || row.createdAt).format('YYYY-MM-DD HH:mm:ss') : '-')
     },
     {
       key: 'lastLoginTime',
@@ -66,21 +92,54 @@ const { columns, columnChecks, data, getData, loading, mobilePagination, searchP
     {
       key: 'operate',
       title: '操作',
-      width: 130,
-      render: row => (
-        <NButton type="primary" ghost size="small" onClick={() => handleOrgTag(row)}>
-          分配组织标签
-        </NButton>
-      )
+      width: 180,
+      render: row => {
+        if (!authStore.isSuperAdmin && !authStore.isDeptLead) {
+          return <NTag bordered={false}>-</NTag>;
+        }
+        return (
+          <NSpace size={8}>
+            <NButton type="primary" ghost size="small" onClick={() => handlePermission(row)}>
+              编辑
+            </NButton>
+            {canDeleteAccount(row) ? (
+              <NPopconfirm onPositiveClick={() => handleDelete(row)}>
+                {{
+                  trigger: () => (
+                    <NButton type="error" ghost size="small">
+                      删除
+                    </NButton>
+                  ),
+                  default: () => `确认删除账号「${row.username}」吗？`
+                }}
+              </NPopconfirm>
+            ) : null}
+          </NSpace>
+        );
+      }
     }
   ]
 });
 
 const visible = ref(false);
+const createVisible = ref(false);
 const editingData = ref<Api.User.Item | null>(null);
-function handleOrgTag(row: Api.User.Item) {
+function handlePermission(row: Api.User.Item) {
   editingData.value = row;
   visible.value = true;
+}
+
+async function handleDelete(row: Api.User.Item) {
+  loading.value = true;
+  const { error } = await request({
+    url: `/admin/users/${row.userId}`,
+    method: 'DELETE'
+  });
+  if (!error) {
+    window.$message?.success('账号删除成功');
+    await getData();
+  }
+  loading.value = false;
 }
 
 // async function setPrimaryOrgTag(userId: string, primaryOrg: string) {
@@ -101,22 +160,29 @@ function handleOrgTag(row: Api.User.Item) {
     </Teleport>
     <NCard title="用户列表" :bordered="false" size="small" class="paper-card sm:flex-1-hidden card-wrapper">
       <template #header-extra>
-        <TableHeaderOperation v-model:columns="columnChecks" :addable="false" :loading="loading" @refresh="getData" />
+        <TableHeaderOperation
+          v-model:columns="columnChecks"
+          :addable="authStore.isSuperAdmin || authStore.isDeptLead"
+          :loading="loading"
+          @add="createVisible = true"
+          @refresh="getData"
+        />
       </template>
       <NDataTable
         :columns="columns"
         :data="data"
         size="small"
         :flex-height="!appStore.isMobile"
-        :scroll-x="962"
+        :scroll-x="1040"
         :loading="loading"
         remote
-        :row-key="row => row.id"
+        :row-key="row => row.userId"
         :pagination="mobilePagination"
         class="sm:h-full"
       />
     </NCard>
     <OrgTagSettingDialog v-model:visible="visible" :row-data="editingData!" @submitted="getData" />
+    <UserCreateDialog v-model:visible="createVisible" @submitted="getData" />
   </div>
 </template>
 

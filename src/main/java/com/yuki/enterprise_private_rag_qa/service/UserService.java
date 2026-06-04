@@ -23,12 +23,14 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.regex.Pattern;
 
 /**
@@ -54,6 +56,10 @@ public class UserService {
     
     @Autowired
     private OrgTagCacheService orgTagCacheService;
+
+    private boolean isSuperAdmin(User user) {
+        return user != null && user.isSuperAdmin();
+    }
 
     /**
      * 注册新用户。
@@ -202,7 +208,7 @@ public class UserService {
         User creator = userRepository.findByUsername(creatorUsername)
                 .orElseThrow(() -> new CustomException("Creator not found", HttpStatus.NOT_FOUND));
         
-        if (creator.getRole() != User.Role.ADMIN) {
+        if (!isSuperAdmin(creator)) {
             throw new CustomException("Only administrators can create admin accounts", HttpStatus.FORBIDDEN);
         }
         
@@ -244,31 +250,290 @@ public class UserService {
      * 修改当前用户登录密码。
      */
     @Transactional
-    public void changePassword(String username, String oldPassword, String newPassword) {
-        if (oldPassword == null || oldPassword.isEmpty()) {
-            throw new CustomException("Current password cannot be empty", HttpStatus.BAD_REQUEST);
-        }
-        if (newPassword == null || newPassword.isEmpty()) {
-            throw new CustomException("New password cannot be empty", HttpStatus.BAD_REQUEST);
+    public void changeOwnPassword(String username, String currentPassword, String newPassword) {
+        if (currentPassword == null || currentPassword.isBlank() || newPassword == null || newPassword.isBlank()) {
+            throw new CustomException("Current password and new password cannot be empty", HttpStatus.BAD_REQUEST);
         }
         if (!PASSWORD_PATTERN.matcher(newPassword).matches()) {
             throw new CustomException("Password must be 6-18 alphanumeric characters", HttpStatus.BAD_REQUEST);
         }
-        if (oldPassword.equals(newPassword)) {
+        if (currentPassword.equals(newPassword)) {
             throw new CustomException("New password must differ from current password", HttpStatus.BAD_REQUEST);
         }
 
         User user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
-        if (!PasswordUtil.matches(oldPassword, user.getPassword())) {
+        if (!PasswordUtil.matches(currentPassword, user.getPassword())) {
             throw new CustomException("Current password is incorrect", HttpStatus.UNAUTHORIZED);
         }
 
         user.setPassword(PasswordUtil.encode(newPassword));
         userRepository.save(user);
-        logger.info("Password changed for user: {}", username);
+        logger.info("User password changed: {}", username);
     }
-    
+
+    @Transactional
+    public void changePassword(String username, String oldPassword, String newPassword) {
+        changeOwnPassword(username, oldPassword, newPassword);
+    }
+
+    @Transactional
+    public User createManagedUser(String creatorUsername, ManagedUserRequest request) {
+        User creator = userRepository.findByUsername(creatorUsername)
+                .orElseThrow(() -> new CustomException("Creator not found", HttpStatus.NOT_FOUND));
+        validateManagedUserRequest(request);
+
+        if (userRepository.findByUsername(request.username()).isPresent()) {
+            throw new CustomException("Username already exists", HttpStatus.BAD_REQUEST);
+        }
+
+        User.Role targetRole = request.role() == null ? User.Role.DEPT_MEMBER : request.role();
+        List<String> requestedOrgTags = normalizeTags(request.orgTags());
+        String primaryOrg = request.primaryOrg();
+
+        if (creator.isDepartmentLead() && !creator.isSuperAdmin()) {
+            if (targetRole != User.Role.DEPT_MEMBER) {
+                throw new CustomException("Department leads can only create department member accounts", HttpStatus.FORBIDDEN);
+            }
+            List<String> allowedDepartments = effectiveUserOrgTags(creator);
+            if (requestedOrgTags.isEmpty()) {
+                String defaultDepartment = creator.getPrimaryOrg() != null && !creator.getPrimaryOrg().isBlank()
+                        ? creator.getPrimaryOrg()
+                        : allowedDepartments.stream().findFirst().orElse(null);
+                if (defaultDepartment != null) {
+                    requestedOrgTags = List.of(defaultDepartment);
+                }
+            }
+            if (requestedOrgTags.isEmpty() || !allowedDepartments.containsAll(requestedOrgTags)) {
+                throw new CustomException("Department leads can only create accounts inside their own departments", HttpStatus.FORBIDDEN);
+            }
+            if (primaryOrg == null || primaryOrg.isBlank()) {
+                primaryOrg = requestedOrgTags.get(0);
+            }
+            if (!requestedOrgTags.contains(primaryOrg)) {
+                throw new CustomException("Primary department must be included in assigned departments", HttpStatus.BAD_REQUEST);
+            }
+        } else if (!creator.isSuperAdmin()) {
+            throw new CustomException("Only super administrators and department leads can create accounts", HttpStatus.FORBIDDEN);
+        }
+
+        validateOrgTagsExist(requestedOrgTags);
+
+        User user = new User();
+        user.setUsername(request.username().trim());
+        user.setPassword(PasswordUtil.encode(request.password()));
+        user.setRole(targetRole);
+        userRepository.save(user);
+
+        String privateTagId = PRIVATE_TAG_PREFIX + user.getUsername();
+        createPrivateOrgTag(privateTagId, user.getUsername(), user);
+
+        LinkedHashSet<String> finalTags = new LinkedHashSet<>();
+        finalTags.add(privateTagId);
+        finalTags.addAll(requestedOrgTags);
+        user.setOrgTags(String.join(",", finalTags));
+        user.setPrimaryOrg(primaryOrg == null || primaryOrg.isBlank() ? privateTagId : primaryOrg);
+        userRepository.save(user);
+
+        orgTagCacheService.cacheUserOrgTags(user.getUsername(), List.copyOf(finalTags));
+        orgTagCacheService.cacheUserPrimaryOrg(user.getUsername(), user.getPrimaryOrg());
+        logger.info("Managed user created: username={}, role={}, creator={}", user.getUsername(), user.getRole(), creatorUsername);
+        return user;
+    }
+
+    @Transactional
+    public User updateManagedUser(String operatorUsername, Long userId, ManagedUserUpdateRequest request) {
+        User operator = userRepository.findByUsername(operatorUsername)
+                .orElseThrow(() -> new CustomException("Operator not found", HttpStatus.NOT_FOUND));
+        User target = userRepository.findById(userId)
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
+        validateManagedUserUpdateRequest(request);
+
+        String oldUsername = target.getUsername();
+        String newUsername = request.username().trim();
+        if (!oldUsername.equals(newUsername)) {
+            Optional<User> existing = userRepository.findByUsername(newUsername);
+            if (existing.isPresent() && !Objects.equals(existing.get().getId(), target.getId())) {
+                throw new CustomException("Username already exists", HttpStatus.BAD_REQUEST);
+            }
+        }
+
+        User.Role targetRole = request.role() == null ? target.getRole() : request.role();
+        List<String> requestedOrgTags = normalizeTags(request.orgTags()).stream()
+                .filter(tag -> !tag.startsWith(PRIVATE_TAG_PREFIX))
+                .toList();
+        String primaryOrg = request.primaryOrg();
+
+        if (operator.isDepartmentLead() && !operator.isSuperAdmin()) {
+            if (target.getRole() != User.Role.DEPT_MEMBER || targetRole != User.Role.DEPT_MEMBER) {
+                throw new CustomException("Department leads can only manage department member accounts", HttpStatus.FORBIDDEN);
+            }
+            List<String> allowedDepartments = effectiveUserOrgTags(operator).stream()
+                    .filter(tag -> !tag.startsWith(PRIVATE_TAG_PREFIX))
+                    .toList();
+            List<String> currentTargetDepartments = normalizeTags(Arrays.asList(
+                    target.getOrgTags() == null ? new String[0] : target.getOrgTags().split(",")
+            )).stream().filter(tag -> !tag.startsWith(PRIVATE_TAG_PREFIX)).toList();
+            if (currentTargetDepartments.stream().noneMatch(allowedDepartments::contains)) {
+                throw new CustomException("Department leads can only manage accounts inside their own departments", HttpStatus.FORBIDDEN);
+            }
+            if (requestedOrgTags.isEmpty()) {
+                requestedOrgTags = List.copyOf(currentTargetDepartments);
+            }
+            if (requestedOrgTags.isEmpty() || !allowedDepartments.containsAll(requestedOrgTags)) {
+                throw new CustomException("Department leads can only assign their own departments", HttpStatus.FORBIDDEN);
+            }
+        } else if (!operator.isSuperAdmin()) {
+            throw new CustomException("Only super administrators and department leads can update accounts", HttpStatus.FORBIDDEN);
+        }
+
+        validateOrgTagsExist(requestedOrgTags);
+        String privateTagId = PRIVATE_TAG_PREFIX + newUsername;
+        if (!oldUsername.equals(newUsername)) {
+            organizationTagRepository.findByTagId(PRIVATE_TAG_PREFIX + oldUsername)
+                    .ifPresent(organizationTagRepository::delete);
+            createPrivateOrgTag(privateTagId, newUsername, target);
+        } else if (!organizationTagRepository.existsByTagId(privateTagId)) {
+            createPrivateOrgTag(privateTagId, newUsername, target);
+        }
+
+        LinkedHashSet<String> finalTags = new LinkedHashSet<>();
+        finalTags.add(privateTagId);
+        finalTags.addAll(requestedOrgTags);
+        if (primaryOrg == null || primaryOrg.isBlank()) {
+            primaryOrg = requestedOrgTags.isEmpty() ? privateTagId : requestedOrgTags.get(0);
+        }
+        if (!finalTags.contains(primaryOrg)) {
+            throw new CustomException("Primary department must be included in assigned departments", HttpStatus.BAD_REQUEST);
+        }
+
+        target.setUsername(newUsername);
+        target.setRole(targetRole);
+        target.setOrgTags(String.join(",", finalTags));
+        target.setPrimaryOrg(primaryOrg);
+        User saved = userRepository.save(target);
+
+        clearUserOrgCaches(oldUsername);
+        if (!oldUsername.equals(newUsername)) {
+            clearUserOrgCaches(newUsername);
+        }
+        orgTagCacheService.cacheUserOrgTags(saved.getUsername(), List.copyOf(finalTags));
+        orgTagCacheService.cacheUserPrimaryOrg(saved.getUsername(), saved.getPrimaryOrg());
+        orgTagCacheService.invalidateAllEffectiveTagsCache();
+        return saved;
+    }
+
+    @Transactional
+    public void deleteManagedUser(String operatorUsername, Long userId) {
+        User operator = userRepository.findByUsername(operatorUsername)
+                .orElseThrow(() -> new CustomException("Operator not found", HttpStatus.NOT_FOUND));
+        User target = userRepository.findById(userId)
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
+
+        if (operator.getId() != null && operator.getId().equals(target.getId())) {
+            throw new CustomException("Cannot delete your own account", HttpStatus.BAD_REQUEST);
+        }
+        if (target.isSuperAdmin()) {
+            throw new CustomException("Cannot delete administrator accounts", HttpStatus.BAD_REQUEST);
+        }
+
+        if (operator.isDepartmentLead() && !operator.isSuperAdmin()) {
+            if (target.getRole() != User.Role.DEPT_MEMBER) {
+                throw new CustomException("Department leads can only delete department member accounts", HttpStatus.FORBIDDEN);
+            }
+            List<String> allowedDepartments = effectiveUserOrgTags(operator);
+            List<String> targetDepartments = target.getOrgTags() == null || target.getOrgTags().isBlank()
+                    ? List.of()
+                    : normalizeTags(Arrays.asList(target.getOrgTags().split(",")));
+            if (targetDepartments.stream()
+                    .filter(tag -> !tag.startsWith(PRIVATE_TAG_PREFIX))
+                    .noneMatch(allowedDepartments::contains)) {
+                throw new CustomException("Department leads can only delete accounts inside their own departments", HttpStatus.FORBIDDEN);
+            }
+        } else if (!operator.isSuperAdmin()) {
+            throw new CustomException("Only super administrators and department leads can delete accounts", HttpStatus.FORBIDDEN);
+        }
+
+        String username = target.getUsername();
+        organizationTagRepository.findByTagId(PRIVATE_TAG_PREFIX + username)
+                .ifPresent(organizationTagRepository::delete);
+        userRepository.delete(target);
+        clearUserOrgCaches(username);
+        orgTagCacheService.invalidateAllEffectiveTagsCache();
+    }
+
+    private void clearUserOrgCaches(String username) {
+        orgTagCacheService.deleteUserOrgTagsCache(username);
+        orgTagCacheService.deleteUserEffectiveTagsCache(username);
+    }
+
+    private void validateManagedUserRequest(ManagedUserRequest request) {
+        if (request == null || request.username() == null || request.username().isBlank()
+                || request.password() == null || request.password().isBlank()) {
+            throw new CustomException("Username and password cannot be empty", HttpStatus.BAD_REQUEST);
+        }
+        if (request.password().length() < 6) {
+            throw new CustomException("Password must be at least 6 characters", HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    private void validateManagedUserUpdateRequest(ManagedUserUpdateRequest request) {
+        if (request == null || request.username() == null || request.username().isBlank()) {
+            throw new CustomException("Username cannot be empty", HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    private List<String> normalizeTags(List<String> tags) {
+        if (tags == null || tags.isEmpty()) {
+            return List.of();
+        }
+        return tags.stream()
+                .filter(tag -> tag != null && !tag.isBlank())
+                .map(String::trim)
+                .distinct()
+                .toList();
+    }
+
+    private List<String> effectiveUserOrgTags(User user) {
+        try {
+            List<String> cached = orgTagCacheService.getUserEffectiveOrgTags(user.getUsername());
+            if (cached != null && !cached.isEmpty()) {
+                return normalizeTags(cached);
+            }
+        } catch (Exception ignored) {
+            // Fallback to persisted user.orgTags below.
+        }
+        if (user.getOrgTags() == null || user.getOrgTags().isBlank()) {
+            return List.of();
+        }
+        return normalizeTags(Arrays.asList(user.getOrgTags().split(",")));
+    }
+
+    private void validateOrgTagsExist(List<String> orgTags) {
+        for (String tag : orgTags) {
+            if (!organizationTagRepository.existsByTagId(tag)) {
+                throw new CustomException("Organization tag does not exist: " + tag, HttpStatus.BAD_REQUEST);
+            }
+        }
+    }
+
+    public record ManagedUserRequest(
+            String username,
+            String password,
+            User.Role role,
+            List<String> orgTags,
+            String primaryOrg
+    ) {
+    }
+
+    public record ManagedUserUpdateRequest(
+            String username,
+            User.Role role,
+            List<String> orgTags,
+            String primaryOrg
+    ) {
+    }
+
     /**
      * 创建组织标签
      * 
@@ -285,7 +550,7 @@ public class UserService {
         User creator = userRepository.findByUsername(creatorUsername)
                 .orElseThrow(() -> new CustomException("Creator not found", HttpStatus.NOT_FOUND));
         
-        if (creator.getRole() != User.Role.ADMIN) {
+        if (!isSuperAdmin(creator)) {
             throw new CustomException("Only administrators can create organization tags", HttpStatus.FORBIDDEN);
         }
         
@@ -328,7 +593,7 @@ public class UserService {
         User admin = userRepository.findByUsername(adminUsername)
                 .orElseThrow(() -> new CustomException("Admin not found", HttpStatus.NOT_FOUND));
         
-        if (admin.getRole() != User.Role.ADMIN) {
+        if (!isSuperAdmin(admin)) {
             throw new CustomException("Only administrators can assign organization tags", HttpStatus.FORBIDDEN);
         }
         
@@ -383,6 +648,40 @@ public class UserService {
         if (user.getPrimaryOrg() != null && !user.getPrimaryOrg().isEmpty()) {
             orgTagCacheService.cacheUserPrimaryOrg(user.getUsername(), user.getPrimaryOrg());
         }
+    }
+
+    /**
+     * 为用户分配系统角色。
+     *
+     * @param userId 用户ID
+     * @param roleName 角色名称
+     * @param adminUsername 管理员用户名
+     */
+    @Transactional
+    public void assignRoleToUser(Long userId, String roleName, String adminUsername) {
+        User admin = userRepository.findByUsername(adminUsername)
+                .orElseThrow(() -> new CustomException("Admin not found", HttpStatus.NOT_FOUND));
+
+        if (!isSuperAdmin(admin)) {
+            throw new CustomException("Only administrators can assign user roles", HttpStatus.FORBIDDEN);
+        }
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new CustomException("User not found", HttpStatus.NOT_FOUND));
+
+        if (admin.getId().equals(user.getId())) {
+            throw new CustomException("Cannot change your own role", HttpStatus.BAD_REQUEST);
+        }
+
+        User.Role role;
+        try {
+            role = User.Role.valueOf(roleName);
+        } catch (Exception e) {
+            throw new CustomException("Invalid role: " + roleName, HttpStatus.BAD_REQUEST);
+        }
+
+        user.setRole(role);
+        userRepository.save(user);
     }
     
     /**
@@ -565,7 +864,7 @@ public class UserService {
         User admin = userRepository.findByUsername(adminUsername)
                 .orElseThrow(() -> new CustomException("Admin not found", HttpStatus.NOT_FOUND));
         
-        if (admin.getRole() != User.Role.ADMIN) {
+        if (!isSuperAdmin(admin)) {
             throw new CustomException("Only administrators can update organization tags", HttpStatus.FORBIDDEN);
         }
         
@@ -649,7 +948,7 @@ public class UserService {
         User admin = userRepository.findByUsername(adminUsername)
                 .orElseThrow(() -> new CustomException("Admin not found", HttpStatus.NOT_FOUND));
         
-        if (admin.getRole() != User.Role.ADMIN) {
+        if (!isSuperAdmin(admin)) {
             throw new CustomException("Only administrators can delete organization tags", HttpStatus.FORBIDDEN);
         }
         
@@ -711,87 +1010,99 @@ public class UserService {
      * 
      * @param keyword 搜索关键词
      * @param orgTag 组织标签过滤
-     * @param status 用户状态过滤
+     * @param role 用户角色过滤
+     * @param status 用户状态过滤（兼容旧前端参数）
      * @param page 页码
      * @param size 每页大小
      * @return 用户列表数据
      */
-    public Map<String, Object> getUserList(String keyword, String orgTag, Integer status, int page, int size) {
+    public Map<String, Object> getUserList(String keyword, String orgTag, String role, Integer status, int page, int size) {
+        return getUserList(null, keyword, orgTag, role, status, page, size);
+    }
+
+    public Map<String, Object> getUserList(String requesterUsername, String keyword, String orgTag, String role, Integer status, int page, int size) {
+        User requester = null;
+        List<String> requesterDepartments = List.of();
+        if (requesterUsername != null && !requesterUsername.isBlank()) {
+            requester = userRepository.findByUsername(requesterUsername)
+                    .orElseThrow(() -> new CustomException("Requester not found", HttpStatus.NOT_FOUND));
+            requesterDepartments = effectiveUserOrgTags(requester);
+        }
         // 页码从1开始，需要转换为从0开始
         int pageIndex = page > 0 ? page - 1 : 0;
         // 创建分页请求
         Pageable pageable = PageRequest.of(pageIndex, size, Sort.by("createdAt").descending());
-        
-        // 获取用户列表
-        Page<User> userPage;
-        
-        if (orgTag != null && !orgTag.isEmpty()) {
-            // 按组织标签过滤用户
-            // 由于我们存储组织标签为逗号分隔的字符串，需要自定义实现
-            // 这里简化处理，获取所有用户后手动过滤
-            List<User> allUsers = userRepository.findAll();
-            List<User> filteredUsers = allUsers.stream()
-                    .filter(user -> {
-                        // 过滤组织标签
-                        if (user.getOrgTags() != null && !user.getOrgTags().isEmpty()) {
-                            Set<String> userTags = new HashSet<>(Arrays.asList(user.getOrgTags().split(",")));
-                            if (!userTags.contains(orgTag)) {
-                                return false;
-                            }
-                        } else {
+
+        User.Role roleFilter = null;
+        if (role != null && !role.isBlank()) {
+            try {
+                roleFilter = User.Role.valueOf(role);
+            } catch (IllegalArgumentException e) {
+                throw new CustomException("Invalid role: " + role, HttpStatus.BAD_REQUEST);
+            }
+        }
+        User.Role finalRoleFilter = roleFilter;
+        User finalRequester = requester;
+        List<String> finalRequesterDepartments = requesterDepartments;
+
+        List<User> filteredUsers = userRepository.findAll().stream()
+                .filter(user -> {
+                    if (finalRequester != null && finalRequester.isDepartmentLead() && !finalRequester.isSuperAdmin()) {
+                        if (user.getRole() != User.Role.DEPT_MEMBER) {
                             return false;
                         }
-                        
-                        // 过滤关键词
-                        if (keyword != null && !keyword.isEmpty()) {
-                            boolean matchesKeyword = user.getUsername().contains(keyword);
-                            if (!matchesKeyword) {
-                                return false;
-                            }
+                        List<String> userTags = user.getOrgTags() == null || user.getOrgTags().isBlank()
+                                ? List.of()
+                                : normalizeTags(Arrays.asList(user.getOrgTags().split(",")));
+                        if (userTags.stream().noneMatch(finalRequesterDepartments::contains)) {
+                            return false;
                         }
-                        
-                        // 过滤状态
-                        if (status != null) {
-                            return user.getRole() == (status == 1 ? User.Role.USER : User.Role.ADMIN);
+                    }
+
+                    if (keyword != null && !keyword.isBlank() && !user.getUsername().contains(keyword)) {
+                        return false;
+                    }
+
+                    if (orgTag != null && !orgTag.isBlank()) {
+                        if (user.getOrgTags() == null || user.getOrgTags().isBlank()) {
+                            return false;
                         }
-                        
-                        return true;
-                    })
-                    .collect(Collectors.toList());
-            
-            // 手动分页
-            int start = (int) pageable.getOffset();
-            int end = Math.min((start + pageable.getPageSize()), filteredUsers.size());
-            
-            List<User> pageContent = start < end ? filteredUsers.subList(start, end) : Collections.emptyList();
-            userPage = new PageImpl<>(pageContent, pageable, filteredUsers.size());
-        } else {
-            // 使用 JPA 分页查询（不含组织标签过滤）
-            // 这里假设UserRepository有findByKeywordAndStatus方法，实际中可能需要自定义实现
-            userPage = userRepository.findAll(pageable);
-            
-            // 手动过滤（简化实现）
-            List<User> filteredUsers = userPage.getContent().stream()
-                    .filter(user -> {
-                        // 过滤关键词
-                        if (keyword != null && !keyword.isEmpty()) {
-                            boolean matchesKeyword = user.getUsername().contains(keyword);
-                            if (!matchesKeyword) {
-                                return false;
-                            }
+                        Set<String> userTags = new HashSet<>(Arrays.asList(user.getOrgTags().split(",")));
+                        if (!userTags.contains(orgTag)) {
+                            return false;
                         }
-                        
-                        // 过滤状态
-                        if (status != null) {
-                            return user.getRole() == (status == 1 ? User.Role.USER : User.Role.ADMIN);
-                        }
-                        
-                        return true;
-                    })
-                    .collect(Collectors.toList());
-                    
-            userPage = new PageImpl<>(filteredUsers, pageable, filteredUsers.size());
-        }
+                    }
+
+                    if (finalRoleFilter != null && user.getRole() != finalRoleFilter) {
+                        return false;
+                    }
+
+                    // 兼容旧的 status 查询：1 表示普通可用用户，0 表示管理员类用户。
+                    if (status != null) {
+                        boolean enabledUser = user.getRole() == User.Role.USER || user.getRole() == User.Role.DEPT_MEMBER;
+                        return status == 1 ? enabledUser : user.isSuperAdmin();
+                    }
+
+                    return true;
+                })
+                .sorted((left, right) -> {
+                    if (left.getCreatedAt() == null && right.getCreatedAt() == null) {
+                        return 0;
+                    }
+                    if (left.getCreatedAt() == null) {
+                        return 1;
+                    }
+                    if (right.getCreatedAt() == null) {
+                        return -1;
+                    }
+                    return right.getCreatedAt().compareTo(left.getCreatedAt());
+                })
+                .collect(Collectors.toList());
+
+        int start = (int) pageable.getOffset();
+        int end = Math.min((start + pageable.getPageSize()), filteredUsers.size());
+        List<User> pageContent = start < end ? filteredUsers.subList(start, end) : Collections.emptyList();
+        Page<User> userPage = new PageImpl<>(pageContent, pageable, filteredUsers.size());
         
         // 转换为前端需要的格式
         List<Map<String, Object>> userList = userPage.getContent().stream()
@@ -818,8 +1129,11 @@ public class UserService {
                     
                     userMap.put("orgTags", orgTagDetails);
                     userMap.put("primaryOrg", user.getPrimaryOrg());
-                    userMap.put("status", user.getRole() == User.Role.USER ? 1 : 0);
+                    userMap.put("role", user.getRole().name());
+                    userMap.put("status", user.getRole() == User.Role.USER || user.getRole() == User.Role.DEPT_MEMBER ? 1 : 0);
                     userMap.put("createdAt", user.getCreatedAt());
+                    userMap.put("createTime", user.getCreatedAt());
+                    userMap.put("updatedAt", user.getUpdatedAt());
                     
                     return userMap;
                 })
@@ -836,4 +1150,3 @@ public class UserService {
         return result;
     }
 }
-

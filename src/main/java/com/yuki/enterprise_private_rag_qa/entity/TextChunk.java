@@ -13,6 +13,8 @@ public class TextChunk {
     private String parentId;   // 父块ID
     private String content;    // 分块内容
     private String parentContent; // 父块完整内容
+    private Long categoryId;
+    private String categoryName;
 
     // 构造方法
     public TextChunk(int chunkId, String content) {
@@ -20,9 +22,16 @@ public class TextChunk {
     }
 
     public TextChunk(int chunkId, String parentId, String content, String parentContent) {
+        this(chunkId, parentId, content, parentContent, null, null);
+    }
+
+    public TextChunk(int chunkId, String parentId, String content, String parentContent,
+                     Long categoryId, String categoryName) {
         this.chunkId = chunkId;
         this.parentId = parentId;
         this.content = content;
         this.parentContent = parentContent;
+        this.categoryId = categoryId;
+        this.categoryName = categoryName;
     }
 }

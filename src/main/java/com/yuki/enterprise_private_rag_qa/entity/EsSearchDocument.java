@@ -19,6 +19,8 @@ public class EsSearchDocument {
     private String modelVersion;
     private String userId;
     private String orgTag;
+    private String knowledgeScope;
+    private String departmentId;
     /** 使用包装类型，避免 Jackson 将 isPublic 映射为 JSON 字段 public */
     @JsonProperty("isPublic")
     private Boolean isPublic;

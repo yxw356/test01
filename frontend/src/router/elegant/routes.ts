@@ -46,7 +46,7 @@ export const generatedRoutes: GeneratedRoute[] = [
     meta: {
       title: 'admin-audit',
       i18nKey: 'route.admin-audit',
-      roles: ['ADMIN'],
+      roles: ['ADMIN', 'SUPER_ADMIN'],
       icon: 'solar:clipboard-list-line-duotone',
       order: 7
     }
@@ -58,7 +58,7 @@ export const generatedRoutes: GeneratedRoute[] = [
     meta: {
       title: 'admin-monitoring',
       i18nKey: 'route.admin-monitoring',
-      roles: ['ADMIN'],
+      roles: ['ADMIN', 'SUPER_ADMIN'],
       icon: 'solar:monitor-line-duotone',
       order: 8
     }
@@ -81,7 +81,7 @@ export const generatedRoutes: GeneratedRoute[] = [
     meta: {
       title: 'chat-history',
       i18nKey: 'route.chat-history',
-      roles: ['ADMIN'],
+      roles: ['ADMIN', 'SUPER_ADMIN'],
       icon: 'solar:hashtag-chat-broken',
       order: 2
     }
@@ -130,7 +130,7 @@ export const generatedRoutes: GeneratedRoute[] = [
       title: 'org-tag',
       i18nKey: 'route.org-tag',
       icon: 'solar:tag-line-duotone',
-      roles: ['ADMIN'],
+      roles: ['ADMIN', 'SUPER_ADMIN'],
       order: 4
     }
   },
@@ -153,7 +153,7 @@ export const generatedRoutes: GeneratedRoute[] = [
       title: 'user',
       i18nKey: 'route.user',
       icon: 'solar:user-line-duotone',
-      roles: ['ADMIN'],
+      roles: ['ADMIN', 'SUPER_ADMIN', 'DEPT_LEAD'],
       order: 5
     }
   }

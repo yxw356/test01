@@ -34,6 +34,7 @@ function componentCards() {
   const c = components.value;
   return [
     { key: 'redis', label: 'Redis', data: c.redis },
+    { key: 'minio', label: 'MinIO', data: c.minio },
     { key: 'elasticsearch', label: 'Elasticsearch', data: c.elasticsearch },
     { key: 'vllmChat', label: '对话模型 (8000)', data: c.vllmChat },
     { key: 'vllmEmbedding', label: '向量模型 (8001)', data: c.vllmEmbedding },
@@ -145,6 +146,14 @@ function componentCards() {
           <div class="metric-item">
             <span>问答 P95(ms)</span>
             <strong>{{ metrics.chatP95EstimateMs ?? 0 }}</strong>
+          </div>
+          <div class="metric-item">
+            <span>问答占用中</span>
+            <strong>{{ metrics.chatActiveCount ?? 0 }}</strong>
+          </div>
+          <div class="metric-item">
+            <span>问答限流</span>
+            <strong>{{ metrics.chatRejectedCount ?? 0 }}</strong>
           </div>
         </div>
         <p v-if="metrics.lastIndexFailureMessage" class="failure-tip">

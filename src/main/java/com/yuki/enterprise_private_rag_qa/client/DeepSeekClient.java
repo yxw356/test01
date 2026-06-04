@@ -24,13 +24,15 @@ public class DeepSeekClient {
     private final String apiKey;
     private final String model;
     private final AiProperties aiProperties;
+    private final boolean ragEnabled;
     private static final Logger logger = LoggerFactory.getLogger(DeepSeekClient.class);
     private static final int MAX_HISTORY_MESSAGES = 6;
     
     public DeepSeekClient(@Value("${deepseek.api.url}") String apiUrl,
                          @Value("${deepseek.api.key}") String apiKey,
                          @Value("${deepseek.api.model}") String model,
-                         AiProperties aiProperties) {
+                         AiProperties aiProperties,
+                         @Value("${rag.enabled:true}") boolean ragEnabled) {
         WebClient.Builder builder = WebClient.builder().baseUrl(apiUrl);
         
         // 只有当 API key 不为空时才添加 Authorization header
@@ -42,6 +44,7 @@ public class DeepSeekClient {
         this.apiKey = apiKey;
         this.model = model;
         this.aiProperties = aiProperties;
+        this.ragEnabled = ragEnabled;
     }
     
     public Disposable streamResponse(String userMessage,
@@ -113,8 +116,10 @@ public class DeepSeekClient {
         if (rules != null) {
             sysBuilder.append(rules).append("\n");
         }
-        sysBuilder.append("本轮参考信息会随当前用户问题一起给出。回答当前问题时，以本轮参考信息为准，不要沿用历史中的旧检索结论。");
-        sysBuilder.append("严禁输出思考过程、英文分析或中间推理，只输出面向用户的最终简体中文回答。");
+        sysBuilder.append("本轮参考信息会随当前用户问题一起给出。")
+                .append("回答知识库相关问题时，以本轮参考信息为准，不要沿用历史中的旧检索结论。")
+                .append("用户提出身份、寒暄、能力介绍、使用帮助等常规问题时，可以直接自然回答。")
+                .append("严禁输出思考过程、英文分析或中间推理，只输出面向用户的最终简体中文回答。");
 
         String systemContent = sysBuilder.toString();
         messages.add(Map.of(
@@ -134,27 +139,41 @@ public class DeepSeekClient {
     }
 
     private String buildCurrentTurnContent(String userMessage, String context, AiProperties.Prompt promptCfg) {
+        if (!ragEnabled) {
+            return "请直接回答用户问题；如果问题与本地知识库资料有关但当前没有检索上下文，请说明当前为本地纯聊天模式。"
+                    + "\n\n用户问题：\n" + userMessage;
+        }
+
         String refStart = promptCfg.getRefStart() != null ? promptCfg.getRefStart() : "<<REF>>";
         String refEnd = promptCfg.getRefEnd() != null ? promptCfg.getRefEnd() : "<<END>>";
         String noResult = promptCfg.getNoResultText() != null ? promptCfg.getNoResultText() : "（本轮无检索结果）";
 
         StringBuilder builder = new StringBuilder();
-        builder.append("请严格根据下面的本轮参考信息回答问题。")
-                .append("如果参考信息中能直接或间接回答问题，请优先使用参考信息；")
-                .append("只有参考信息确实没有答案时，才回答“暂无相关信息”。")
-                .append("数字、单位、面积、金额必须与参考原文完全一致，禁止改写位数。")
-                .append("引用来源时使用“(来源#编号: 文件名)”格式，不要输出 <<REF>> 或 <<END>> 标记。\n\n")
-                .append(refStart).append("\n");
-
         if (context != null && !context.isBlank()) {
+            builder.append("请严格根据下面的本轮参考信息回答问题。")
+                    .append("如果参考信息中能直接或间接回答问题，请优先使用参考信息；")
+                    .append("数字、单位、面积、金额必须与参考原文完全一致，禁止改写位数。")
+                    .append("允许结合常识补充解释，但不要编造企业内部制度、数字或文件内容。")
+                    .append("回答正文保持简洁，不要在正文输出“来源#编号”、文件名引用或 <<REF>>、<<END>> 标记；")
+                    .append("来源会由系统在回答结束后单独折叠展示。\n\n")
+                    .append(refStart).append("\n");
             builder.append(context);
+            builder.append(refEnd)
+                    .append("\n\n用户问题：\n")
+                    .append(userMessage);
         } else {
-            builder.append(noResult).append("\n");
+            builder.append("当前没有检索到可用的知识库参考信息。")
+                    .append("如果用户在问身份、寒暄、通用概念、写作、翻译、使用帮助等常规问题，")
+                    .append("可以直接回答常规问题，不要机械回答“暂无相关信息”。")
+                    .append("如果用户明确询问企业制度、流程、文档数据、统计数字或内部事实，")
+                    .append("请说明当前知识库没有找到相关依据，并建议用户换个问法或补充资料。")
+                    .append("\n\n")
+                    .append(refStart).append("\n")
+                    .append(noResult).append("\n")
+                    .append(refEnd)
+                    .append("\n\n用户问题：\n")
+                    .append(userMessage);
         }
-
-        builder.append(refEnd)
-                .append("\n\n用户问题：\n")
-                .append(userMessage);
         return builder.toString();
     }
 
@@ -315,28 +334,28 @@ public class DeepSeekClient {
                 return;
             }
 
-            String payload = chunk.trim();
-            if (payload.startsWith("data:")) {
-                payload = payload.substring("data:".length()).trim();
-            }
-
-            // 检查是否是结束标记
-            if ("[DONE]".equals(payload)) {
-                logger.debug("对话结束");
-                return;
-            }
-            
-            // 直接解析 JSON
             ObjectMapper mapper = new ObjectMapper();
-            JsonNode node = mapper.readTree(payload);
-            String content = node.path("choices")
-                               .path(0)
-                               .path("delta")
-                               .path("content")
-                               .asText("");
-            
-            if (!content.isEmpty()) {
-                onChunk.accept(content);
+            for (String line : chunk.split("\\R")) {
+                String payload = line.trim();
+                if (payload.isEmpty() || payload.startsWith(":")) {
+                    continue;
+                }
+                if (payload.startsWith("data:")) {
+                    payload = payload.substring("data:".length()).trim();
+                }
+
+                if ("[DONE]".equals(payload)) {
+                    logger.debug("对话结束");
+                    continue;
+                }
+
+                JsonNode node = mapper.readTree(payload);
+                JsonNode delta = node.path("choices").path(0).path("delta");
+                String content = delta.path("content").asText("");
+
+                if (!content.isEmpty()) {
+                    onChunk.accept(content);
+                }
             }
         } catch (Exception e) {
             logger.error("处理数据块时出错: {}", e.getMessage(), e);

@@ -17,6 +17,32 @@ public class FileProcessingTask {
     private String userId;   // 上传用户ID
     private String orgTag;   // 文件所属组织标签
     private boolean isPublic; // 文件是否公开
+    private String knowledgeScope; // 知识范围：PUBLIC / DEPARTMENT / PRIVATE
+    private String departmentId;   // 所属部门ID
+    private Long categoryId;       // 知识分类ID
+    private String categoryName;   // 知识分类名称
+    private Long cleaningRuleSetId; // 数据清洗规则集ID
+
+    public FileProcessingTask(String fileMd5, String filePath, String fileName,
+                              String userId, String orgTag, boolean isPublic) {
+        this(fileMd5, filePath, fileName, userId, orgTag, isPublic,
+                isPublic ? "PUBLIC" : "DEPARTMENT", orgTag, null, null, null);
+    }
+
+    public FileProcessingTask(String fileMd5, String filePath, String fileName,
+                              String userId, String orgTag, boolean isPublic,
+                              String knowledgeScope, String departmentId) {
+        this(fileMd5, filePath, fileName, userId, orgTag, isPublic,
+                knowledgeScope, departmentId, null, null, null);
+    }
+
+    public FileProcessingTask(String fileMd5, String filePath, String fileName,
+                              String userId, String orgTag, boolean isPublic,
+                              String knowledgeScope, String departmentId,
+                              Long categoryId, String categoryName) {
+        this(fileMd5, filePath, fileName, userId, orgTag, isPublic,
+                knowledgeScope, departmentId, categoryId, categoryName, null);
+    }
     
     /**
      * 向后兼容的构造函数
@@ -28,5 +54,8 @@ public class FileProcessingTask {
         this.userId = null;
         this.orgTag = "DEFAULT";
         this.isPublic = false;
+        this.knowledgeScope = "DEPARTMENT";
+        this.departmentId = "DEFAULT";
+        this.cleaningRuleSetId = null;
     }
 }

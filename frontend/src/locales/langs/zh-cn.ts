@@ -1,6 +1,6 @@
 const local: App.I18n.Schema = {
   system: {
-    title: 'QA',
+    title: '龙汇QA',
     updateTitle: '系统版本更新通知',
     updateContent: '检测到系统有新版本发布，是否立即刷新页面？',
     updateConfirm: '立即刷新',
@@ -165,8 +165,8 @@ const local: App.I18n.Schema = {
     chat: '聊天助手',
     'chat-history': '聊天记录',
     'knowledge-base': '知识库',
-    'org-tag': '组织标签',
-    'admin-audit': '审计日志',
+    'org-tag': '部门管理',
+    'admin-audit': '操作日志',
     'admin-monitoring': '运行监控',
     user: '用户管理',
     'personal-center': '个人中心'

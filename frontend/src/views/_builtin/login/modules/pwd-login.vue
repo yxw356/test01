@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive } from 'vue';
-import { loginModuleRecord } from '@/constants/app';
 import { useAuthStore } from '@/store/modules/auth';
-import { useRouterPush } from '@/hooks/common/router';
 import { useFormRules, useNaiveForm } from '@/hooks/common/form';
 import { $t } from '@/locales';
 
@@ -11,7 +9,6 @@ defineOptions({
 });
 
 const authStore = useAuthStore();
-const { toggleLoginModule } = useRouterPush();
 const { formRef, validate } = useNaiveForm();
 
 interface FormModel {
@@ -101,9 +98,6 @@ function handleAccountLogin(account: Account) {
     <div class="flex-col gap-6">
       <NButton type="primary" size="large" round block :loading="authStore.loginLoading" @click="handleSubmit">
         {{ $t('page.login.common.login') }}
-      </NButton>
-      <NButton block @click="toggleLoginModule('register')">
-        {{ $t(loginModuleRecord.register) }}
       </NButton>
 
       <span class="text-center">

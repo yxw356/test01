@@ -60,11 +60,16 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
             // 控制器方法通过@RequestAttribute("userId")获取用户ID
             if (path.matches(".*/upload/chunk.*") || 
                 path.matches(".*/upload/merge.*") ||
+                path.matches(".*/upload/preflight.*") ||
                 path.matches(".*/upload/status.*") ||
                 path.matches(".*/documents/uploads.*") ||
                 path.matches(".*/documents/accessible.*") ||
+                path.matches(".*/documents/knowledge-spaces.*") ||
+                path.matches(".*/knowledge-categories.*") ||
+                path.matches(".*/data-cleaning.*") ||
                 path.matches(".*/search/hybrid.*") ||
-                (path.matches(".*/documents/[a-fA-F0-9]{32}(/reindex)?.*")
+                path.matches(".*/users/password.*") ||
+                (path.matches(".*/documents/[a-fA-F0-9]{32}(/(reindex|reclean))?.*")
                         && ("DELETE".equals(request.getMethod()) || "POST".equals(request.getMethod())))) {
                 
                 String operation = "未知操作";
@@ -72,18 +77,30 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
                     operation = "分片上传";
                 } else if (path.contains("/merge")) {
                     operation = "合并分片";
-                } else if (path.contains("/upload/status")) {
+                } else if (path.contains("/preflight")) {
+                    operation = "检查上传依赖";
+                } else if (path.contains("/upload/status") || path.contains("/status")) {
                     operation = "查询上传进度";
                 } else if (path.contains("/uploads")) {
                     operation = "获取用户文档";
                 } else if (path.contains("/accessible")) {
                     operation = "获取可访问文档";
+                } else if (path.contains("/knowledge-spaces")) {
+                    operation = "获取知识库分区";
+                } else if (path.contains("/knowledge-categories")) {
+                    operation = "管理知识分类";
+                } else if (path.contains("/data-cleaning")) {
+                    operation = "数据清洗";
                 } else if (path.contains("/search/hybrid")) {
                     operation = "混合检索";
+                } else if (path.contains("/users/password")) {
+                    operation = "修改密码";
                 } else if ("DELETE".equals(request.getMethod()) && path.matches(".*/documents/[a-fA-F0-9]{32}.*")) {
                     operation = "删除文档";
                 } else if ("POST".equals(request.getMethod()) && path.contains("/reindex")) {
                     operation = "重新索引";
+                } else if ("POST".equals(request.getMethod()) && path.contains("/reclean")) {
+                    operation = "重新清洗";
                 }
                 
                 logger.info("处理{}请求: {}", operation, path);
@@ -172,7 +189,7 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
             }
             
             // 如果是管理员，直接放行
-            if ("ADMIN".equals(role)) {
+            if ("ADMIN".equals(role) || "SUPER_ADMIN".equals(role)) {
                 logger.debug("用户是管理员，放行请求");
                 filterChain.doFilter(request, response);
                 return;

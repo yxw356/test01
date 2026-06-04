@@ -1,20 +1,29 @@
 package com.yuki.enterprise_private_rag_qa.controller;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.util.unit.DataSize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.yuki.enterprise_private_rag_qa.config.KafkaConfig;
+import com.yuki.enterprise_private_rag_qa.exception.CustomException;
 import com.yuki.enterprise_private_rag_qa.model.AuditAction;
 import com.yuki.enterprise_private_rag_qa.model.FileProcessingTask;
 import com.yuki.enterprise_private_rag_qa.model.FileUpload;
+import com.yuki.enterprise_private_rag_qa.model.KnowledgeCategory;
+import com.yuki.enterprise_private_rag_qa.model.User;
 import com.yuki.enterprise_private_rag_qa.repository.FileUploadRepository;
 import com.yuki.enterprise_private_rag_qa.service.AuditService;
+import com.yuki.enterprise_private_rag_qa.service.CleaningRuleSetService;
+import com.yuki.enterprise_private_rag_qa.service.DocumentPermissionService;
 import com.yuki.enterprise_private_rag_qa.service.FileIndexStatusService;
 import com.yuki.enterprise_private_rag_qa.service.FileTypeValidationService;
+import com.yuki.enterprise_private_rag_qa.service.KnowledgeCategoryService;
+import com.yuki.enterprise_private_rag_qa.service.MonitoringService;
 import com.yuki.enterprise_private_rag_qa.service.UploadService;
 import com.yuki.enterprise_private_rag_qa.service.UserService;
 import com.yuki.enterprise_private_rag_qa.utils.AuditSupport;
@@ -25,6 +34,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,9 +69,34 @@ public class UploadController {
     @Autowired
     private FileIndexStatusService fileIndexStatusService;
 
+    @Autowired
+    private DocumentPermissionService documentPermissionService;
+
+    @Autowired
+    private KnowledgeCategoryService knowledgeCategoryService;
+
+    @Autowired(required = false)
+    private CleaningRuleSetService cleaningRuleSetService;
+
+    @Autowired
+    private MonitoringService monitoringService;
+
+    @Value("${knowledge.upload.max-file-size:200MB}")
+    private DataSize maxUploadFileSize;
+
     public UploadController(UploadService uploadService, KafkaTemplate<String, Object> kafkaTemplate) {
         this.uploadService = uploadService;
         this.kafkaTemplate = kafkaTemplate;
+    }
+
+    @GetMapping("/preflight")
+    public ResponseEntity<Map<String, Object>> uploadPreflight(@RequestAttribute("userId") String userId) {
+        LogUtils.logBusiness("UPLOAD_PREFLIGHT", userId, "检查上传依赖状态");
+        Map<String, Object> response = new HashMap<>();
+        response.put("code", 200);
+        response.put("message", "success");
+        response.put("data", monitoringService.collectUploadPreflightStatus());
+        return ResponseEntity.ok(response);
     }
 
     /**
@@ -86,6 +121,10 @@ public class UploadController {
             @RequestParam("fileName") String fileName,
             @RequestParam(value = "totalChunks", required = false) Integer totalChunks,
             @RequestParam(value = "orgTag", required = false) String orgTag,
+            @RequestParam(value = "knowledgeScope", required = false) String knowledgeScope,
+            @RequestParam(value = "departmentId", required = false) String departmentId,
+            @RequestParam(value = "categoryId", required = false) Long categoryId,
+            @RequestParam(value = "cleaningRuleSetId", required = false) Long cleaningRuleSetId,
             @RequestParam(value = "isPublic", required = false, defaultValue = "false") boolean isPublic,
             @RequestParam("file") MultipartFile file,
             @RequestAttribute("userId") String userId) throws IOException {
@@ -113,12 +152,25 @@ public class UploadController {
                     return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
                 }
             }
+
+            if (maxUploadFileSize != null && totalSize > maxUploadFileSize.toBytes()) {
+                String message = String.format("文件大小超过限制，最大支持 %s", formatDataSize(maxUploadFileSize.toBytes()));
+                monitor.end(message);
+                Map<String, Object> errorResponse = new HashMap<>();
+                errorResponse.put("code", HttpStatus.PAYLOAD_TOO_LARGE.value());
+                errorResponse.put("message", message);
+                errorResponse.put("maxFileSize", maxUploadFileSize.toBytes());
+                return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(errorResponse);
+            }
             
             String fileType = getFileType(fileName);
             String contentType = file.getContentType();
             
-            LogUtils.logBusiness("UPLOAD_CHUNK", userId, "接收到分片上传请求: fileMd5=%s, chunkIndex=%d, fileName=%s, fileType=%s, contentType=%s, fileSize=%d, totalSize=%d, orgTag=%s, isPublic=%s", 
-                    fileMd5, chunkIndex, fileName, fileType, contentType, file.getSize(), totalSize, orgTag, isPublic);
+            FileUpload.KnowledgeScope resolvedScope = documentPermissionService.resolveScope(knowledgeScope, isPublic);
+            isPublic = resolvedScope == FileUpload.KnowledgeScope.PUBLIC;
+
+            LogUtils.logBusiness("UPLOAD_CHUNK", userId, "接收到分片上传请求: fileMd5=%s, chunkIndex=%d, fileName=%s, fileType=%s, contentType=%s, fileSize=%d, totalSize=%d, orgTag=%s, departmentId=%s, scope=%s, isPublic=%s",
+                    fileMd5, chunkIndex, fileName, fileType, contentType, file.getSize(), totalSize, orgTag, departmentId, resolvedScope, isPublic);
         
             // 如果未指定组织标签，则获取用户的主组织标签
             if (orgTag == null || orgTag.isEmpty()) {
@@ -136,10 +188,27 @@ public class UploadController {
                     return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResponse);
                 }
             }
+
+            if (departmentId == null || departmentId.isBlank()) {
+                departmentId = orgTag;
+            }
+
+            User currentUser = documentPermissionService.requireUser(userId);
+            documentPermissionService.assertCanUpload(currentUser, resolvedScope, departmentId);
+            KnowledgeCategory category = knowledgeCategoryService.resolveUploadCategory(
+                    categoryId, resolvedScope, departmentId, currentUser
+            );
+            if (cleaningRuleSetId != null && cleaningRuleSetService != null) {
+                cleaningRuleSetService.resolveRuleConfig(cleaningRuleSetId, userId);
+            }
         
             LogUtils.logFileOperation(userId, "UPLOAD_CHUNK", fileName, fileMd5, "PROCESSING");
         
-            uploadService.uploadChunk(fileMd5, chunkIndex, totalSize, fileName, file, orgTag, isPublic, userId);
+            uploadService.uploadChunk(fileMd5, chunkIndex, totalSize, fileName, file, orgTag, isPublic, userId,
+                    resolvedScope, departmentId,
+                    category != null ? category.getId() : null,
+                    category != null ? category.getName() : null,
+                    cleaningRuleSetId);
             
             List<Integer> uploadedChunks = uploadService.getUploadedChunks(fileMd5, userId);
             int actualTotalChunks = uploadService.getTotalChunks(fileMd5, userId);
@@ -161,6 +230,14 @@ public class UploadController {
             response.put("data", data);
             
             return ResponseEntity.ok(response);
+        } catch (CustomException e) {
+            String fileType = getFileType(fileName);
+            LogUtils.logBusinessError("UPLOAD_CHUNK", userId, "分片上传权限校验失败: fileMd5=%s, fileName=%s, fileType=%s, chunkIndex=%d", e, fileMd5, fileName, fileType, chunkIndex);
+            monitor.end("分片上传失败: " + e.getMessage());
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("code", e.getStatus().value());
+            errorResponse.put("message", e.getMessage());
+            return ResponseEntity.status(e.getStatus()).body(errorResponse);
         } catch (Exception e) {
             String fileType = getFileType(fileName);
             LogUtils.logBusinessError("UPLOAD_CHUNK", userId, "分片上传失败: fileMd5=%s, fileName=%s, fileType=%s, chunkIndex=%d", e, fileMd5, fileName, fileType, chunkIndex);
@@ -290,11 +367,24 @@ public class UploadController {
             // 合并文件
             LogUtils.logBusiness("MERGE_FILE", userId, "开始合并文件分片: fileMd5=%s, fileName=%s, fileType=%s, 分片数量=%d", request.fileMd5(), request.fileName(), fileType, totalChunks);
             String objectUrl = uploadService.mergeChunks(request.fileMd5(), request.fileName(), userId);
+            fileUpload.setStatus(1);
+            if (request.cleaningRuleSetId() != null) {
+                if (cleaningRuleSetService != null) {
+                    cleaningRuleSetService.resolveRuleConfig(request.cleaningRuleSetId(), userId);
+                }
+                fileUpload.setCleaningRuleSetId(request.cleaningRuleSetId());
+            }
+            fileUpload.setMergedAt(LocalDateTime.now());
+            fileUploadRepository.save(fileUpload);
             LogUtils.logFileOperation(userId, "MERGE", request.fileName(), request.fileMd5(), "SUCCESS");
 
             // 发送任务到 Kafka，包含完整的权限信息
-            LogUtils.logBusiness("MERGE_FILE", userId, "创建文件处理任务: fileMd5=%s, fileName=%s, fileType=%s, orgTag=%s, isPublic=%s", 
-                    request.fileMd5(), request.fileName(), fileType, fileUpload.getOrgTag(), fileUpload.isPublic());
+            FileUpload.KnowledgeScope effectiveScope = documentPermissionService.effectiveScope(fileUpload);
+            String effectiveDepartmentId = documentPermissionService.effectiveDepartmentId(fileUpload);
+
+            LogUtils.logBusiness("MERGE_FILE", userId, "创建文件处理任务: fileMd5=%s, fileName=%s, fileType=%s, orgTag=%s, isPublic=%s, scope=%s, departmentId=%s",
+                    request.fileMd5(), request.fileName(), fileType, fileUpload.getOrgTag(), fileUpload.isPublic(),
+                    effectiveScope, effectiveDepartmentId);
             
             FileProcessingTask task = new FileProcessingTask(
                     request.fileMd5(),
@@ -302,7 +392,12 @@ public class UploadController {
                     request.fileName(),
                     fileUpload.getUserId(),
                     fileUpload.getOrgTag(),
-                    fileUpload.isPublic()
+                    fileUpload.isPublic(),
+                    effectiveScope.name(),
+                    effectiveDepartmentId,
+                    fileUpload.getCategoryId(),
+                    fileUpload.getCategoryName(),
+                    fileUpload.getCleaningRuleSetId()
             );
             
             LogUtils.logBusiness("MERGE_FILE", userId, "发送文件处理任务到Kafka(事务): topic=%s, fileMd5=%s, fileName=%s", 
@@ -356,10 +451,22 @@ public class UploadController {
         return (double) uploadedChunks.size() / totalChunks * 100;
     }
 
+    private String formatDataSize(long bytes) {
+        double mb = bytes / 1024.0 / 1024.0;
+        if (mb >= 1) {
+            return String.format("%.2fMB", mb);
+        }
+        return String.format("%.2fKB", bytes / 1024.0);
+    }
+
     /**
      * 合并请求的辅助类，包含文件的MD5值和文件名
      */
-    public record MergeRequest(String fileMd5, String fileName) {}
+    public record MergeRequest(String fileMd5, String fileName, Long cleaningRuleSetId) {
+        public MergeRequest(String fileMd5, String fileName) {
+            this(fileMd5, fileName, null);
+        }
+    }
 
     /**
      * 获取支持的文件类型列表接口
@@ -499,4 +606,3 @@ public class UploadController {
         }
     }
 }
-

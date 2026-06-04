@@ -70,6 +70,61 @@ public class FileUpload {
     private String orgTag;
 
     /**
+     * 知识范围：PUBLIC公共知识、DEPARTMENT部门知识、PRIVATE个人知识。
+     * 旧数据默认按 isPublic/orgTag 兼容推断。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "knowledge_scope", nullable = false)
+    private KnowledgeScope knowledgeScope = KnowledgeScope.DEPARTMENT;
+
+    /**
+     * 部门专有知识所属部门。第一阶段复用组织标签ID，后续可迁移到独立部门表。
+     */
+    @Column(name = "department_id")
+    private String departmentId;
+
+    @Column(name = "space_id", length = 80)
+    private String spaceId;
+
+    @Column(name = "category_id")
+    private Long categoryId;
+
+    @Column(name = "category_name", length = 120)
+    private String categoryName;
+
+    @Column(name = "cleaning_rule_set_id")
+    private Long cleaningRuleSetId;
+
+    /**
+     * 数据清洗状态：未清洗、清洗中、已清洗、失败。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "cleaning_status", nullable = false)
+    private CleaningStatus cleaningStatus = CleaningStatus.PENDING;
+
+    @Column(name = "original_chars", nullable = false)
+    private int originalChars = 0;
+
+    @Column(name = "cleaned_chars", nullable = false)
+    private int cleanedChars = 0;
+
+    @Column(name = "removed_chars", nullable = false)
+    private int removedChars = 0;
+
+    @Column(name = "duplicate_lines_removed", nullable = false)
+    private int duplicateLinesRemoved = 0;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "cleaning_quality_status", nullable = false)
+    private CleaningQualityStatus cleaningQualityStatus = CleaningQualityStatus.OK;
+
+    @Column(name = "cleaning_quality_issues", length = 512)
+    private String cleaningQualityIssues;
+
+    @Column(name = "cleaning_quality_score", nullable = false)
+    private double cleaningQualityScore = 1.0d;
+
+    /**
      * 文件是否公开
      * true表示所有用户可访问，false表示仅组织内用户可访问
      */
@@ -87,6 +142,25 @@ public class FileUpload {
      * 文件合并完成的时间（仅在 merge 成功时写入，勿使用 @UpdateTimestamp）
      */
     private LocalDateTime mergedAt;
+
+    public enum KnowledgeScope {
+        PUBLIC,
+        DEPARTMENT,
+        PRIVATE
+    }
+
+    public enum CleaningStatus {
+        PENDING,
+        CLEANING,
+        CLEANED,
+        FAILED
+    }
+
+    public enum CleaningQualityStatus {
+        OK,
+        WARNING,
+        FAILED
+    }
 
     /** 对外展示的上传状态：已合并或已进入索引流程则视为上传完成 */
     public int getEffectiveUploadStatus() {

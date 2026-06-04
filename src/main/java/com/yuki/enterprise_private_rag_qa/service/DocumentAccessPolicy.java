@@ -12,29 +12,39 @@ public final class DocumentAccessPolicy {
 
     public static boolean canAccess(String docUserId, String docOrgTag, boolean docIsPublic,
                                     String requestUserDbId, List<String> userEffectiveTags) {
+        return canAccess(docUserId, docOrgTag, docIsPublic, null, null, requestUserDbId, userEffectiveTags);
+    }
+
+    public static boolean canAccess(String docUserId, String docOrgTag, boolean docIsPublic,
+                                    String docKnowledgeScope, String docDepartmentId,
+                                    String requestUserDbId, List<String> userEffectiveTags) {
         if (requestUserDbId != null && requestUserDbId.equals(docUserId)) {
             return true;
         }
-        if (docIsPublic) {
+        if (docIsPublic || "PUBLIC".equalsIgnoreCase(docKnowledgeScope)) {
             return true;
         }
-        if (docOrgTag == null || userEffectiveTags == null || userEffectiveTags.isEmpty()) {
+        if (userEffectiveTags == null || userEffectiveTags.isEmpty()) {
             return false;
         }
         for (String tag : userEffectiveTags) {
             if (tag == null) {
                 continue;
             }
-            if (tag.equals(docOrgTag)) {
-                return true;
-            }
-            if ("DEFAULT".equalsIgnoreCase(tag) && "default".equalsIgnoreCase(docOrgTag)) {
-                return true;
-            }
-            if ("default".equalsIgnoreCase(tag) && "DEFAULT".equalsIgnoreCase(docOrgTag)) {
+            if (sameDepartment(tag, docDepartmentId) || sameDepartment(tag, docOrgTag)) {
                 return true;
             }
         }
         return false;
+    }
+
+    private static boolean sameDepartment(String left, String right) {
+        if (left == null || right == null) {
+            return false;
+        }
+        if (left.equals(right)) {
+            return true;
+        }
+        return "DEFAULT".equalsIgnoreCase(left) && "DEFAULT".equalsIgnoreCase(right);
     }
 }

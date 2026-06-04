@@ -13,6 +13,7 @@ import com.yuki.enterprise_private_rag_qa.utils.ContextSnippetUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.socket.TextMessage;
@@ -45,6 +46,9 @@ public class ChatHandler {
     private final AuditService auditService;
     private final OperationMetricsService operationMetricsService;
     private final ConversationService conversationService;
+    private final ChatConcurrencyLimiter chatConcurrencyLimiter;
+    private final boolean redisEnabled;
+    private final boolean ragEnabled;
     
     // 用于存储每个会话的完整响应
     private final Map<String, StringBuilder> responseBuilders = new ConcurrentHashMap<>();
@@ -52,11 +56,14 @@ public class ChatHandler {
     private final Map<String, List<SearchResult>> sessionRetrievalResults = new ConcurrentHashMap<>();
     // 用于取消每个会话正在进行的 LLM 流式请求
     private final Map<String, Disposable> activeStreams = new ConcurrentHashMap<>();
+    private final Map<String, String> inMemoryCurrentConversations = new ConcurrentHashMap<>();
+    private final Map<String, List<Map<String, String>>> inMemoryConversationHistory = new ConcurrentHashMap<>();
     // 用于停止时保存已生成的部分回答
     private final Map<String, ActiveResponse> activeResponses = new ConcurrentHashMap<>();
     // 停止标志 - 简单方案
     private final Map<String, Boolean> stopFlags = new ConcurrentHashMap<>();
     private final Map<String, Long> chatStartTimes = new ConcurrentHashMap<>();
+    private final Map<String, Boolean> chatPermitSessions = new ConcurrentHashMap<>();
 
     public ChatHandler(RedisTemplate<String, String> redisTemplate,
                       HybridSearchService searchService,
@@ -64,7 +71,10 @@ public class ChatHandler {
                       RagPipeline ragPipeline,
                       AuditService auditService,
                       OperationMetricsService operationMetricsService,
-                      ConversationService conversationService) {
+                      ConversationService conversationService,
+                      ChatConcurrencyLimiter chatConcurrencyLimiter,
+                      @Value("${chat.redis.enabled:true}") boolean redisEnabled,
+                      @Value("${rag.enabled:true}") boolean ragEnabled) {
         this.redisTemplate = redisTemplate;
         this.searchService = searchService;
         this.deepSeekClient = deepSeekClient;
@@ -72,15 +82,29 @@ public class ChatHandler {
         this.auditService = auditService;
         this.operationMetricsService = operationMetricsService;
         this.conversationService = conversationService;
+        this.chatConcurrencyLimiter = chatConcurrencyLimiter;
+        this.redisEnabled = redisEnabled;
+        this.ragEnabled = ragEnabled;
         this.objectMapper = new ObjectMapper();
     }
 
     public void processMessage(String userId, String userMessage, WebSocketSession session) {
+        processMessage(userId, userMessage, session, null);
+    }
+
+    public void processMessage(String userId, String userMessage, WebSocketSession session, KnowledgeSpaceContext knowledgeSpaceContext) {
         logger.info("开始处理消息，用户ID: {}, 会话ID: {}", userId, session.getId());
         long chatStart = System.currentTimeMillis();
         chatStartTimes.put(session.getId(), chatStart);
         auditService.recordSuccess(userId, userId, AuditAction.CHAT, "conversation",
                 session.getId(), AuditSupport.truncate(userMessage, 200), null, null);
+        if (!chatConcurrencyLimiter.tryAcquire()) {
+            chatStartTimes.remove(session.getId());
+            sendErrorMessage(session, "当前问答请求较多，请稍后再试。");
+            sendCompletionNotification(session, List.of());
+            return;
+        }
+        chatPermitSessions.put(session.getId(), true);
         try {
             String sessionId = session.getId();
             stopFlags.remove(sessionId);
@@ -102,15 +126,17 @@ public class ChatHandler {
             String chatHistoryStr = formatChatHistory(history);
 
             // 4. 执行 RAG Pipeline（Stage 1→2→3→4）
-            RagPipeline.RagResult ragResult = ragPipeline.execute(userMessage, userId, chatHistoryStr);
+            RagPipeline.RagResult ragResult = ragEnabled
+                    ? ragPipeline.execute(userMessage, userId, chatHistoryStr)
+                    : emptyRagResult();
             logger.info("RAG Pipeline completed. finalDocs={}, intent={}, usedSupplementary={}, isFallback={}",
                     ragResult.finalDocs().size(),
                     ragResult.queryInfo() != null ? ragResult.queryInfo().getIntent() : "N/A",
                     ragResult.usedSupplementaryRetrieval(),
                     ragResult.isFallback());
 
-            // 5. 补充文件名并构建上下文
-            List<SearchResult> finalDocs = ragResult.finalDocs();
+            // 5. 按知识分区过滤、补充文件名并构建上下文
+            List<SearchResult> finalDocs = filterByKnowledgeSpace(ragResult.finalDocs(), knowledgeSpaceContext);
             searchService.enrichWithFileNames(finalDocs);
             String context = buildContext(userMessage, finalDocs);
             sessionRetrievalResults.put(sessionId, finalDocs);
@@ -135,6 +161,7 @@ public class ChatHandler {
                 error -> {
                     activeStreams.remove(sessionId);
                     activeResponses.remove(sessionId);
+                    releaseChatPermit(sessionId);
                     if (Boolean.TRUE.equals(stopFlags.get(sessionId))) {
                         logger.info("流式请求已被用户停止，忽略取消后的错误回调，会话ID: {}", sessionId);
                         responseBuilders.remove(sessionId);
@@ -156,13 +183,37 @@ public class ChatHandler {
             responseBuilders.remove(session.getId());
             activeResponses.remove(session.getId());
             cleanupActiveStream(session.getId());
+            releaseChatPermit(session.getId());
         }
+    }
+
+    List<SearchResult> filterByKnowledgeSpace(List<SearchResult> results, KnowledgeSpaceContext context) {
+        if (results == null || results.isEmpty() || context == null || context.knowledgeScope() == null || context.knowledgeScope().isBlank()) {
+            return results == null ? List.of() : results;
+        }
+        String scope = context.knowledgeScope().trim();
+        if ("PUBLIC".equalsIgnoreCase(scope)) {
+            return results.stream()
+                    .filter(result -> "PUBLIC".equalsIgnoreCase(result.getKnowledgeScope()) || Boolean.TRUE.equals(result.getIsPublic()))
+                    .toList();
+        }
+        if ("DEPARTMENT".equalsIgnoreCase(scope) && context.departmentId() != null && !context.departmentId().isBlank()) {
+            return results.stream()
+                    .filter(result -> "DEPARTMENT".equalsIgnoreCase(result.getKnowledgeScope()))
+                    .filter(result -> context.departmentId().equals(result.getDepartmentId()) || context.departmentId().equals(result.getOrgTag()))
+                    .toList();
+        }
+        return results;
+    }
+
+    public record KnowledgeSpaceContext(String knowledgeScope, String departmentId) {
     }
 
     private void completeResponse(String userId, String conversationId, String userMessage, WebSocketSession session) {
         String sessionId = session.getId();
         activeStreams.remove(sessionId);
         activeResponses.remove(sessionId);
+        releaseChatPermit(sessionId);
 
         if (Boolean.TRUE.equals(stopFlags.get(sessionId))) {
             logger.info("流式请求已被用户停止，忽略完成回调，会话ID: {}", sessionId);
@@ -209,6 +260,14 @@ public class ChatHandler {
     }
 
     private String getOrCreateConversationId(String userId) {
+        if (!redisEnabled) {
+            return inMemoryCurrentConversations.computeIfAbsent(userId, id -> {
+                String conversationId = UUID.randomUUID().toString();
+                logger.info("为用户 {} 创建本地内存会话ID: {}", userId, conversationId);
+                return conversationId;
+            });
+        }
+
         String key = "user:" + userId + ":current_conversation";
         String conversationId = redisTemplate.opsForValue().get(key);
         
@@ -224,6 +283,11 @@ public class ChatHandler {
     }
 
     private List<Map<String, String>> getConversationHistory(String conversationId) {
+        if (!redisEnabled) {
+            List<Map<String, String>> history = inMemoryConversationHistory.get(conversationId);
+            return history == null ? new ArrayList<>() : new ArrayList<>(history);
+        }
+
         String key = "conversation:" + conversationId;
         String json = redisTemplate.opsForValue().get(key);
         try {
@@ -310,6 +374,12 @@ public class ChatHandler {
         if (history.size() > 20) {
             history = history.subList(history.size() - 20, history.size());
         }
+
+        if (!redisEnabled) {
+            inMemoryConversationHistory.put(conversationId, new ArrayList<>(history));
+            logger.debug("更新本地内存会话历史，会话ID: {}, 总消息数: {}", conversationId, history.size());
+            return;
+        }
         
         try {
             String json = objectMapper.writeValueAsString(history);
@@ -336,6 +406,10 @@ public class ChatHandler {
             context.append(String.format("[来源#%d: %s]\n%s\n\n", i + 1, fileLabel, snippet));
         }
         return context.toString();
+    }
+
+    private RagPipeline.RagResult emptyRagResult() {
+        return new RagPipeline.RagResult(List.of(), null, List.of(), null, null, false, List.of(), true);
     }
 
     private void sendResponseChunk(WebSocketSession session, String chunk) {
@@ -383,8 +457,12 @@ public class ChatHandler {
 
     private void handleError(WebSocketSession session, Throwable error) {
         logger.error("AI服务错误: {}", error.getMessage(), error);
+        sendErrorMessage(session, "AI服务暂时不可用，请稍后重试");
+    }
+
+    private void sendErrorMessage(WebSocketSession session, String message) {
         try {
-            Map<String, String> errorResponse = Map.of("error", "AI服务暂时不可用，请稍后重试");
+            Map<String, String> errorResponse = Map.of("error", message);
             String errorJson = objectMapper.writeValueAsString(errorResponse);
             logger.error("发送错误消息到会话 {}: {}", session.getId(), errorJson);
             session.sendMessage(new TextMessage(errorJson));
@@ -411,6 +489,7 @@ public class ChatHandler {
         } else {
             logger.info("停止请求未找到正在进行的流式请求，会话ID: {}", sessionId);
         }
+        releaseChatPermit(sessionId);
 
         ActiveResponse activeResponse =         activeResponses.remove(sessionId);
         StringBuilder partialBuilder = responseBuilders.remove(sessionId);
@@ -457,5 +536,11 @@ public class ChatHandler {
     }
 
     private record ActiveResponse(String userId, String conversationId, String userMessage) {
+    }
+
+    private void releaseChatPermit(String sessionId) {
+        if (chatPermitSessions.remove(sessionId) != null) {
+            chatConcurrencyLimiter.release();
+        }
     }
 }

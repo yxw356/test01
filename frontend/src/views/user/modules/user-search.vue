@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { enableStatusOptions } from '@/constants/common';
-
 defineOptions({
   name: 'UserSearch'
 });
@@ -12,6 +10,15 @@ const emit = defineEmits<{
 const { formRef } = useNaiveForm();
 
 const model = defineModel<Api.User.SearchParams>('model', { required: true });
+
+const roleOptions = [
+  { label: '普通用户', value: 'USER' },
+  { label: '部门成员', value: 'DEPT_MEMBER' },
+  { label: '部门负责人', value: 'DEPT_LEAD' },
+  { label: '知识管理员', value: 'KNOWLEDGE_ADMIN' },
+  { label: '超级管理员', value: 'SUPER_ADMIN' },
+  { label: '超级管理员(兼容旧ADMIN)', value: 'ADMIN' }
+] satisfies Array<{ label: string; value: Api.Auth.UserInfo['role'] }>;
 
 watchEffect(() => {
   search();
@@ -27,14 +34,14 @@ async function search() {
       <NFormItem label="关键词" path="keyword">
         <NInput v-model:value="model.keyword" placeholder="请输入关键词" clearable />
       </NFormItem>
-      <NFormItem label="组织标签" path="userGender">
+      <NFormItem label="部门" path="orgTag">
         <OrgTagCascader v-model:value="model.orgTag" clearable class="w-200px!" />
       </NFormItem>
-      <NFormItem label="启用状态" path="status">
+      <NFormItem label="角色" path="role">
         <NSelect
-          v-model:value="model.status"
-          placeholder="请选择启用状态"
-          :options="enableStatusOptions"
+          v-model:value="model.role"
+          placeholder="请选择角色"
+          :options="roleOptions"
           clearable
           class="w-200px!"
         />

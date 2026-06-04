@@ -21,8 +21,10 @@ import com.yuki.enterprise_private_rag_qa.repository.UserRepository;
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
-//import java.util.Comparator;
+import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -53,6 +55,9 @@ public class DocumentService {
     @Autowired
     private UserRepository userRepository;
 
+    @Autowired
+    private DocumentPermissionService documentPermissionService;
+
     /**
      * 删除文档及其相关数据
      * 该方法将删除:
@@ -69,7 +74,7 @@ public class DocumentService {
         
         try {
             // 获取文件信息以获取文件名
-            FileUpload fileUpload = fileUploadRepository.findByFileMd5AndUserId(fileMd5, userId)
+            FileUpload fileUpload = fileUploadRepository.findByFileMd5(fileMd5)
                     .orElseThrow(() -> new RuntimeException("文件不存在"));
             
             // 1. 删除Elasticsearch中的数据
@@ -135,27 +140,10 @@ public class DocumentService {
         logger.info("获取用户可访问文件列表: userId={}, orgTagFilter={}", userId, orgTagFilter);
         
         try {
-            User user;
-            if (userId != null && userId.chars().allMatch(Character::isDigit)) {
-                user = userRepository.findById(Long.parseLong(userId))
-                    .orElseThrow(() -> new RuntimeException("用户不存在: " + userId));
-            } else {
-                user = userRepository.findByUsername(userId)
-                    .orElseThrow(() -> new RuntimeException("用户不存在: " + userId));
-            }
-            
-            String effectiveUserId = String.valueOf(user.getId());
-            List<String> userEffectiveTags = orgTagCacheService.getUserEffectiveOrgTags(user.getUsername());
-            logger.debug("用户有效组织标签: {}", userEffectiveTags);
-            
-            List<FileUpload> files;
-            if (userEffectiveTags.isEmpty()) {
-                files = fileUploadRepository.findByUserIdOrIsPublicTrue(effectiveUserId);
-                logger.debug("用户无组织标签，仅返回个人和公开文件");
-            } else {
-                files = fileUploadRepository.findAccessibleFilesWithTags(effectiveUserId, userEffectiveTags);
-                logger.debug("使用有效组织标签查询文件");
-            }
+            User user = documentPermissionService.requireUser(userId);
+            List<FileUpload> files = fileUploadRepository.findAll().stream()
+                    .filter(file -> documentPermissionService.canView(user, file))
+                    .collect(Collectors.toList());
             
             if (orgTagFilter != null && !orgTagFilter.isBlank()) {
                 String tag = orgTagFilter.trim();
@@ -242,37 +230,10 @@ public class DocumentService {
         logger.info("获取文件预览内容: fileMd5={}, fileName={}", fileMd5, fileName);
         
         try {
-            // List<DocumentVector> vectors = documentVectorRepository.findByFileMd5(fileMd5);
-            // if (vectors != null && !vectors.isEmpty()) {
-            //     vectors.sort(Comparator.comparing(DocumentVector::getChunkId));
-            //     StringBuilder content = new StringBuilder();
-            //     int maxChars = 10000;
-            //     for (DocumentVector vector : vectors) {
-            //         String text = vector.getTextContent();
-            //         if (text == null || text.isBlank()) {
-            //             continue;
-            //         }
-            //         if (content.length() > 0) {
-            //             content.append("\n\n");
-            //         }
-            //         int remaining = maxChars - content.length();
-            //         if (remaining <= 0) {
-            //             break;
-            //         }
-            //         if (text.length() > remaining) {
-            //             content.append(text, 0, remaining);
-            //             break;
-            //         }
-            //         content.append(text);
-            //     }
-            //     if (content.length() > 0) {
-            //         if (content.length() >= maxChars) {
-            //             content.append("\n... (内容已截断，仅显示前10KB)");
-            //         }
-            //         logger.info("使用已解析文本生成预览内容: fileMd5={}, contentLength={}", fileMd5, content.length());
-            //         return content.toString();
-            //     }
-            // }
+            String parsedPreview = buildPreviewFromParsedChunks(fileMd5);
+            if (parsedPreview != null) {
+                return parsedPreview;
+            }
             
             String objectName = "merged/" + fileName;
             
@@ -287,7 +248,7 @@ public class DocumentService {
                                 .object(objectName)
                                 .build())) {
                     
-                    BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, "UTF-8"));
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8));
                     StringBuilder content = new StringBuilder();
                     String line;
                     int bytesRead = 0;
@@ -295,7 +256,7 @@ public class DocumentService {
                     
                     while ((line = reader.readLine()) != null && bytesRead < maxBytes) {
                         content.append(line).append("\n");
-                        bytesRead += line.getBytes("UTF-8").length + 1;
+                        bytesRead += line.getBytes(StandardCharsets.UTF_8).length + 1;
                     }
                     
                     String result = content.toString();
@@ -332,6 +293,45 @@ public class DocumentService {
             return "预览失败: " + e.getMessage();
         }
     }
+
+    private String buildPreviewFromParsedChunks(String fileMd5) {
+        List<DocumentVector> vectors = documentVectorRepository.findByFileMd5(fileMd5);
+        if (vectors == null || vectors.isEmpty()) {
+            return null;
+        }
+
+        vectors = new ArrayList<>(vectors);
+        vectors.sort(Comparator.comparing(DocumentVector::getChunkId));
+        StringBuilder content = new StringBuilder();
+        int maxChars = 10000;
+        for (DocumentVector vector : vectors) {
+            String text = vector.getTextContent();
+            if (text == null || text.isBlank()) {
+                continue;
+            }
+            if (!content.isEmpty()) {
+                content.append("\n\n");
+            }
+            int remaining = maxChars - content.length();
+            if (remaining <= 0) {
+                break;
+            }
+            if (text.length() > remaining) {
+                content.append(text, 0, remaining);
+                break;
+            }
+            content.append(text);
+        }
+
+        if (content.isEmpty()) {
+            return null;
+        }
+        if (content.length() >= maxChars) {
+            content.append("\n... (内容已截断，仅显示前10000字符)");
+        }
+        logger.info("使用已解析文本生成预览内容: fileMd5={}, contentLength={}", fileMd5, content.length());
+        return content.toString();
+    }
     
     /**
      * 获取文件扩展名
@@ -349,7 +349,7 @@ public class DocumentService {
      */
     private boolean isTextFile(String extension) {
         String[] textExtensions = {
-            "txt", "md", "doc", "docx", "pdf", "html", "htm", "xml", "json", 
+            "txt", "md", "html", "htm", "xml", "json",
             "csv", "log", "java", "js", "ts", "py", "cpp", "c", "h", "css", 
             "scss", "less", "sql", "yml", "yaml", "properties", "conf", "config"
         };

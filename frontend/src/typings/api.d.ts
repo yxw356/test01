@@ -40,7 +40,7 @@ declare namespace Api {
     interface UserInfo {
       id: number;
       username: string;
-      role: 'USER' | 'ADMIN';
+      role: 'USER' | 'DEPT_MEMBER' | 'DEPT_LEAD' | 'KNOWLEDGE_ADMIN' | 'SUPER_ADMIN' | 'ADMIN';
       orgTags: string[];
       primaryOrg: string;
     }
@@ -71,6 +71,7 @@ declare namespace Api {
       description: string;
       parentTag: string | null;
       children?: Item[];
+      deptLeads?: string[];
     }
 
     type List = Common.PaginatingQueryRecord<Item>;
@@ -88,6 +89,7 @@ declare namespace Api {
       Common.CommonSearchParams & {
         keyword: string;
         orgTag: string;
+        role: Auth.UserInfo['role'];
         status: number;
       }
     >;
@@ -95,15 +97,35 @@ declare namespace Api {
     type Item = {
       userId: string;
       username: string;
+      role: Auth.UserInfo['role'];
       email: string;
       status: number;
       orgTags: Pick<OrgTag.Item, 'tagId' | 'name'>[];
       primaryOrg: string;
       createTime: string;
+      createdAt?: string;
+      updatedAt?: string;
       lastLoginTime: string;
     };
 
     type List = Common.PaginatingQueryRecord<Item>;
+
+    type FilePermissionAction =
+      | 'VIEW'
+      | 'PREVIEW'
+      | 'DOWNLOAD'
+      | 'UPLOAD_PUBLIC'
+      | 'UPLOAD_DEPARTMENT'
+      | 'DELETE'
+      | 'RECLEAN'
+      | 'REINDEX'
+      | 'RESUME_UPLOAD';
+
+    interface RoleFilePermission {
+      action: FilePermissionAction;
+      allowed: boolean;
+      configured: boolean;
+    }
   }
 
   namespace KnowledgeBase {
@@ -116,9 +138,26 @@ declare namespace Api {
     interface SearchResult {
       fileMd5: string;
       chunkId: number;
+      parentId?: string | null;
       textContent: string;
+      parentTextContent?: string | null;
       score: number;
       fileName: string;
+      userId?: string | null;
+      orgTag?: string | null;
+      isPublic?: boolean;
+      knowledgeScope?: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE' | string | null;
+      departmentId?: string | null;
+      retrievalSource?: string | null;
+      rank?: number;
+      queryUsed?: string | null;
+      rrfScore?: number;
+      rrfRank?: number;
+      crossScore?: number;
+      crossRank?: number;
+      mmrScore?: number;
+      finalRank?: number;
+      retrievalSources?: string[];
     }
 
     interface UploadState {
@@ -126,24 +165,133 @@ declare namespace Api {
       activeUploads: Set<string>; // 当前正在上传的任务ID
     }
 
+    interface KnowledgeSpaceSummary {
+      id: string;
+      type: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      title: string;
+      departmentId: string | null;
+      fileCount: number;
+      indexedCount: number;
+      processingCount: number;
+      interruptedCount: number;
+      cleaningIssueCount: number;
+      lastUpdatedAt: string | null;
+    }
+
     interface Form {
       orgTag: string | null;
       orgTagName: string | null;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      departmentId: string | null;
+      categoryId: number | null;
+      categoryName: string | null;
+      cleaningRuleSetId: number | null;
       isPublic: boolean;
       fileList: import('naive-ui').UploadFileInfo[];
     }
 
+    interface Category {
+      id: number;
+      name: string;
+      parentId?: number | null;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      departmentId?: string | null;
+      description?: string | null;
+      sortOrder: number;
+      enabled: boolean;
+    }
+
+    interface CategoryCreateForm {
+      name: string;
+      parentId?: number | null;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      departmentId?: string | null;
+      description?: string | null;
+      sortOrder?: number;
+    }
+
+    interface CleaningRuleConfig {
+      normalizeLineBreaks: boolean;
+      normalizeUnicodeSpaces: boolean;
+      normalizeWhitespace: boolean;
+      trimLines: boolean;
+      collapseBlankLines: boolean;
+      removeDuplicateLines: boolean;
+      minDuplicateLineLength: number;
+      dropLinePatterns: string[];
+    }
+
+    interface CleaningRuleSet extends CleaningRuleConfig {
+      id: number;
+      name: string;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      departmentId?: string | null;
+      description?: string | null;
+      enabled: boolean;
+      createdBy?: string | null;
+      createdAt?: string;
+      updatedAt?: string;
+    }
+
+    interface CleaningRuleSetCreateForm extends CleaningRuleConfig {
+      name: string;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      departmentId: string | null;
+      description: string | null;
+    }
+
+    interface CleaningPreviewRequest {
+      rawText: string;
+      ruleConfig?: CleaningRuleConfig | null;
+      ruleSetId?: number | null;
+    }
+
+    interface CleaningPreviewResult {
+      cleanedText: string;
+      originalChars: number;
+      cleanedChars: number;
+      removedChars: number;
+      duplicateLinesRemoved: number;
+      compressionRatio: number;
+      qualityStatus?: 'OK' | 'WARNING' | 'FAILED';
+      qualityIssues?: string[];
+      qualityScore?: number;
+    }
+
     interface UploadTask {
-      file: File;
+      file?: File;
       chunk: Blob | null;
       fileMd5: string;
       chunkIndex: number;
       totalSize: number;
       fileName: string;
+      userId?: string;
       orgTag: string | null;
       orgTagName?: string | null;
+      knowledgeScope?: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      departmentId?: string | null;
+      categoryId?: number | null;
+      categoryName?: string | null;
+      cleaningRuleSetId?: number | null;
+      cleaningRuleName?: string | null;
+      cleaningStatus?: 'PENDING' | 'CLEANING' | 'CLEANED' | 'FAILED';
+      originalChars?: number;
+      cleanedChars?: number;
+      removedChars?: number;
+      duplicateLinesRemoved?: number;
+      cleaningQualityStatus?: 'OK' | 'WARNING' | 'FAILED';
+      cleaningQualityIssues?: string | null;
+      cleaningQualityScore?: number;
       public: boolean;
       isPublic: boolean;
+      canView?: boolean;
+      canManage?: boolean;
+      canPreview?: boolean;
+      canDownload?: boolean;
+      canDelete?: boolean;
+      canReclean?: boolean;
+      canReindex?: boolean;
+      canResumeUpload?: boolean;
       uploadedChunks: number[];
       progress: number;
       status: UploadStatus;
@@ -151,16 +299,27 @@ declare namespace Api {
       mergedAt?: string;
       indexStatus?: number;
       indexError?: string | null;
+      uploadError?: string;
       requestIds?: string[]; // 请求ID，用于取消上传
     }
     type List = Common.PaginatingQueryRecord<UploadTask>;
 
-    type Merge = Pick<UploadTask, 'fileMd5' | 'fileName'>;
+    type Merge = Pick<UploadTask, 'fileMd5' | 'fileName' | 'cleaningRuleSetId'>;
 
     interface Progress {
       uploaded: number[];
       progress: number;
       totalChunks: number;
+    }
+
+    interface UploadPreflight {
+      ready: boolean;
+      message: string;
+      components: Record<string, { status: string; detail?: string; bucket?: string; topic?: string }>;
+      uploadLimits?: {
+        maxFileSize: number;
+        maxFileSizeLabel: string;
+      };
     }
 
     interface Result {
@@ -225,6 +384,10 @@ declare namespace Api {
       detail?: string;
       result?: string;
       clientIp?: string;
+      userAgent?: string;
+      deviceType?: string;
+      browser?: string;
+      os?: string;
       durationMs?: number;
       createdAt: string;
     }
@@ -241,6 +404,7 @@ declare namespace Api {
       timestamp?: string;
       components?: {
         redis?: ComponentStatus;
+        minio?: ComponentStatus;
         elasticsearch?: ComponentStatus;
         vllmChat?: ComponentStatus;
         vllmEmbedding?: ComponentStatus;
@@ -254,6 +418,8 @@ declare namespace Api {
         chatRequestCount?: number;
         chatAverageDurationMs?: number;
         chatP95EstimateMs?: number;
+        chatActiveCount?: number;
+        chatRejectedCount?: number;
       };
     }
   }

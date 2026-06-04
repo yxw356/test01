@@ -38,6 +38,19 @@ public class User {
     private LocalDateTime updatedAt;
 
     public enum Role {
-        USER, ADMIN
+        USER,
+        DEPT_MEMBER,
+        DEPT_LEAD,
+        KNOWLEDGE_ADMIN,
+        SUPER_ADMIN,
+        ADMIN
+    }
+
+    public boolean isSuperAdmin() {
+        return role == Role.SUPER_ADMIN || role == Role.ADMIN;
+    }
+
+    public boolean isDepartmentLead() {
+        return role == Role.DEPT_LEAD;
     }
 }

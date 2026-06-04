@@ -28,7 +28,9 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
     primaryOrg: ''
   });
 
-  const isAdmin = computed(() => userInfo.role === 'ADMIN');
+  const isAdmin = computed(() => ['ADMIN', 'SUPER_ADMIN', 'KNOWLEDGE_ADMIN'].includes(userInfo.role));
+  const isSuperAdmin = computed(() => ['ADMIN', 'SUPER_ADMIN'].includes(userInfo.role));
+  const isDeptLead = computed(() => userInfo.role === 'DEPT_LEAD');
 
   /** is super role in static route */
   const isStaticSuper = computed(() => {
@@ -183,8 +185,8 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
   async function logout() {
     const { error } = await fetchLogout();
     if (!error) {
+      useKnowledgeBaseStore().resetStore();
       resetStore();
-      useKnowledgeBaseStore().$reset();
     }
   }
 
@@ -194,6 +196,8 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
     isStaticSuper,
     isLogin,
     isAdmin,
+    isSuperAdmin,
+    isDeptLead,
     loginLoading,
     resetStore,
     login,

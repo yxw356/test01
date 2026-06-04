@@ -102,9 +102,9 @@ log4j:
 
 deepseek:
   api:
-    url: https://api.deepseek.com/v1  # 本地是 http://localhost:11434/v1 官方：https://api.deepseek.com/v1
-    model: deepseek-chat  # 本地: deepseek-r1:7b, 官方: deepseek-chat
-    key:  # DeepSeek API Key 如果是本地就为空
+    url: ${DEEPSEEK_API_URL:https://api.deepseek.com}
+    model: ${DEEPSEEK_API_MODEL:deepseek-v4-flash}
+    key: ${DEEPSEEK_API_KEY:}
 
 embedding:
   api:
@@ -117,7 +117,7 @@ embedding:
 ai:
   prompt:
     rules: |
-      你是企业知识中枢知识助手，须遵守：
+      你是龙汇QA知识助手，须遵守：
       1. 仅用简体中文作答。
       2. 回答需先给结论，再给论据。
       3. 如引用参考信息，请在句末加 (来源#编号: 文件名)。
@@ -130,4 +130,3 @@ ai:
     temperature: 0.3
     max-tokens: 2000
     top-p: 0.9
-
