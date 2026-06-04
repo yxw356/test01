@@ -116,7 +116,10 @@ public class DocumentIndexService {
         }
 
         User operator = documentPermissionService.requireUser(requestUserId);
-        if (!documentPermissionService.canManage(operator, file)) {
+        boolean allowed = "重新索引".equals(actionName)
+                ? documentPermissionService.canReindex(operator, file)
+                : documentPermissionService.canReclean(operator, file);
+        if (!allowed) {
             throw new CustomException("没有权限" + actionName + "此文档", HttpStatus.FORBIDDEN);
         }
 

@@ -98,6 +98,12 @@ class DocumentControllerTest {
         assertEquals(2, data.size());
         assertTrue((Boolean) data.get(0).get("canView"));
         assertTrue((Boolean) data.get(0).get("canManage"));
+        assertTrue((Boolean) data.get(0).get("canPreview"));
+        assertTrue((Boolean) data.get(0).get("canDownload"));
+        assertTrue((Boolean) data.get(0).get("canDelete"));
+        assertTrue((Boolean) data.get(0).get("canReclean"));
+        assertTrue((Boolean) data.get(0).get("canReindex"));
+        assertFalse((Boolean) data.get(0).get("canResumeUpload"));
         assertEquals("DEPARTMENT", data.get(0).get("knowledgeScope"));
         assertEquals("FIN", data.get(0).get("departmentId"));
         assertEquals(9L, data.get(0).get("categoryId"));
@@ -115,6 +121,12 @@ class DocumentControllerTest {
 
         assertTrue((Boolean) data.get(1).get("canView"));
         assertFalse((Boolean) data.get(1).get("canManage"));
+        assertTrue((Boolean) data.get(1).get("canPreview"));
+        assertTrue((Boolean) data.get(1).get("canDownload"));
+        assertFalse((Boolean) data.get(1).get("canDelete"));
+        assertFalse((Boolean) data.get(1).get("canReclean"));
+        assertFalse((Boolean) data.get(1).get("canReindex"));
+        assertFalse((Boolean) data.get(1).get("canResumeUpload"));
         assertEquals("PUBLIC", data.get(1).get("knowledgeScope"));
         assertEquals("OPS", data.get(1).get("departmentId"));
     }

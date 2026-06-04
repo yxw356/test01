@@ -109,6 +109,23 @@ declare namespace Api {
     };
 
     type List = Common.PaginatingQueryRecord<Item>;
+
+    type FilePermissionAction =
+      | 'VIEW'
+      | 'PREVIEW'
+      | 'DOWNLOAD'
+      | 'UPLOAD_PUBLIC'
+      | 'UPLOAD_DEPARTMENT'
+      | 'DELETE'
+      | 'RECLEAN'
+      | 'REINDEX'
+      | 'RESUME_UPLOAD';
+
+    interface RoleFilePermission {
+      action: FilePermissionAction;
+      allowed: boolean;
+      configured: boolean;
+    }
   }
 
   namespace KnowledgeBase {
@@ -256,6 +273,12 @@ declare namespace Api {
       isPublic: boolean;
       canView?: boolean;
       canManage?: boolean;
+      canPreview?: boolean;
+      canDownload?: boolean;
+      canDelete?: boolean;
+      canReclean?: boolean;
+      canReindex?: boolean;
+      canResumeUpload?: boolean;
       uploadedChunks: number[];
       progress: number;
       status: UploadStatus;

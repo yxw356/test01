@@ -18,13 +18,17 @@ import static org.mockito.Mockito.when;
 class DocumentPermissionServiceTest {
 
     private OrgTagCacheService orgTagCacheService;
+    private RoleFilePermissionService roleFilePermissionService;
     private DocumentPermissionService service;
 
     @BeforeEach
     void setUp() {
         UserRepository userRepository = mock(UserRepository.class);
         orgTagCacheService = mock(OrgTagCacheService.class);
-        service = new DocumentPermissionService(userRepository, orgTagCacheService);
+        roleFilePermissionService = mock(RoleFilePermissionService.class);
+        service = new DocumentPermissionService(userRepository, orgTagCacheService, roleFilePermissionService);
+        when(roleFilePermissionService.isAllowed(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyBoolean()))
+                .thenAnswer(invocation -> invocation.getArgument(2));
     }
 
     @Test
@@ -103,6 +107,60 @@ class DocumentPermissionServiceTest {
 
         assertTrue(service.canManage(lead, document));
         assertFalse(service.canManage(member, document));
+    }
+
+    @Test
+    void knowledgeAdminCanManagePublicKnowledge() {
+        User knowledgeAdmin = user(13L, "ka", User.Role.KNOWLEDGE_ADMIN, "FIN");
+        FileUpload document = document("99", FileUpload.KnowledgeScope.PUBLIC, "FIN", true);
+
+        assertTrue(service.canManage(knowledgeAdmin, document));
+        assertTrue(service.canDelete(knowledgeAdmin, document));
+    }
+
+    @Test
+    void documentActionPermissionsAreSeparatedByActionAndStatus() {
+        User lead = user(14L, "lead", User.Role.DEPT_LEAD, "FIN");
+        when(orgTagCacheService.getUserEffectiveOrgTags("lead")).thenReturn(List.of("FIN"));
+        FileUpload completed = document("99", FileUpload.KnowledgeScope.DEPARTMENT, "FIN", false);
+        completed.setStatus(1);
+        FileUpload uploading = document("99", FileUpload.KnowledgeScope.DEPARTMENT, "FIN", false);
+        uploading.setStatus(0);
+
+        assertTrue(service.canPreview(lead, completed));
+        assertTrue(service.canDownload(lead, completed));
+        assertTrue(service.canDelete(lead, completed));
+        assertTrue(service.canReclean(lead, completed));
+        assertTrue(service.canReindex(lead, completed));
+        assertFalse(service.canReclean(lead, uploading));
+        assertFalse(service.canReindex(lead, uploading));
+    }
+
+    @Test
+    void onlyOwnerCanResumeInterruptedUpload() {
+        User owner = user(15L, "owner", User.Role.DEPT_MEMBER, "FIN");
+        User lead = user(16L, "lead", User.Role.DEPT_LEAD, "FIN");
+        when(orgTagCacheService.getUserEffectiveOrgTags("lead")).thenReturn(List.of("FIN"));
+        FileUpload uploading = document("15", FileUpload.KnowledgeScope.DEPARTMENT, "FIN", false);
+        uploading.setStatus(0);
+        FileUpload completed = document("15", FileUpload.KnowledgeScope.DEPARTMENT, "FIN", false);
+        completed.setStatus(1);
+
+        assertTrue(service.canResumeUpload(owner, uploading));
+        assertFalse(service.canResumeUpload(lead, uploading));
+        assertFalse(service.canResumeUpload(owner, completed));
+    }
+
+    @Test
+    void rolePermissionConfigCanDenyAnOtherwiseAllowedDeleteAction() {
+        User lead = user(17L, "lead", User.Role.DEPT_LEAD, "FIN");
+        when(orgTagCacheService.getUserEffectiveOrgTags("lead")).thenReturn(List.of("FIN"));
+        when(roleFilePermissionService.isAllowed(User.Role.DEPT_LEAD, FilePermissionAction.DELETE, true)).thenReturn(false);
+        FileUpload document = document("99", FileUpload.KnowledgeScope.DEPARTMENT, "FIN", false);
+        document.setStatus(1);
+
+        assertTrue(service.canManage(lead, document));
+        assertFalse(service.canDelete(lead, document));
     }
 
     @Test

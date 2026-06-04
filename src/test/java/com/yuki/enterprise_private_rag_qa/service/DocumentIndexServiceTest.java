@@ -66,7 +66,7 @@ class DocumentIndexServiceTest {
 
         when(fileUploadRepository.findByFileMd5("abc123abc123abc123abc123abc123ab")).thenReturn(Optional.of(file));
         when(documentPermissionService.requireUser("99")).thenReturn(operator);
-        when(documentPermissionService.canManage(operator, file)).thenReturn(true);
+        when(documentPermissionService.canReclean(operator, file)).thenReturn(true);
         when(documentPermissionService.effectiveScope(file)).thenReturn(FileUpload.KnowledgeScope.DEPARTMENT);
         when(documentPermissionService.effectiveDepartmentId(file)).thenReturn("FIN");
         when(documentService.generateDownloadUrl(file.getFileMd5())).thenReturn("http://minio/download-url");

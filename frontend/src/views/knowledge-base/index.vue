@@ -144,9 +144,7 @@ const { columns, columnChecks, data, getData, loading } = useTable({
         <div class="flex flex-wrap gap-4">
           {renderResumeUploadButton(row)}
           {renderReindexButton(row)}
-          <NButton type="primary" ghost size="small" onClick={() => handleFilePreview(row.fileName)}>
-            预览
-          </NButton>
+          {renderPreviewButton(row)}
           {renderDeleteButton(row)}
         </div>
       )
@@ -501,12 +499,39 @@ function renderVisibility(row: Api.KnowledgeBase.UploadTask) {
 function canManageDocument(row: Api.KnowledgeBase.UploadTask) {
   if (typeof row.canManage === 'boolean') return row.canManage;
   if (authStore.isSuperAdmin) return true;
+  if (authStore.userInfo.role === 'KNOWLEDGE_ADMIN' && normalizeScope(row) === 'PUBLIC') return true;
   if (String(authStore.userInfo.id) === String(row.userId)) return true;
   if (!authStore.isDeptLead) return false;
 
   const scope = normalizeScope(row);
   const departmentId = row.departmentId || row.orgTag;
   return scope === 'DEPARTMENT' && Boolean(departmentId) && authStore.userInfo.orgTags.includes(departmentId!);
+}
+
+function canPreviewDocument(row: Api.KnowledgeBase.UploadTask) {
+  if (typeof row.canPreview === 'boolean') return row.canPreview;
+  if (typeof row.canView === 'boolean') return row.canView;
+  return true;
+}
+
+function canDeleteDocument(row: Api.KnowledgeBase.UploadTask) {
+  if (typeof row.canDelete === 'boolean') return row.canDelete;
+  return canManageDocument(row);
+}
+
+function canRecleanDocument(row: Api.KnowledgeBase.UploadTask) {
+  if (typeof row.canReclean === 'boolean') return row.canReclean;
+  return canManageDocument(row) && row.status === UploadStatus.Completed;
+}
+
+function canReindexDocument(row: Api.KnowledgeBase.UploadTask) {
+  if (typeof row.canReindex === 'boolean') return row.canReindex;
+  return canManageDocument(row) && row.status === UploadStatus.Completed;
+}
+
+function canResumeDocumentUpload(row: Api.KnowledgeBase.UploadTask) {
+  if (typeof row.canResumeUpload === 'boolean') return row.canResumeUpload;
+  return String(authStore.userInfo.id) === String(row.userId) && row.status !== UploadStatus.Completed;
 }
 
 // 渲染上传状态
@@ -638,7 +663,7 @@ function cleaningRuleName(rowOrRuleSetId?: Api.KnowledgeBase.UploadTask | number
 
 function renderReindexButton(row: Api.KnowledgeBase.UploadTask) {
   if (row.status !== UploadStatus.Completed) return null;
-  if (!canManageDocument(row)) return null;
+  if (!canReindexDocument(row)) return null;
   const indexStatus = row.indexStatus ?? IndexStatus.Indexed;
   if (indexStatus !== IndexStatus.Failed && indexStatus !== IndexStatus.Pending && indexStatus !== IndexStatus.Indexing) {
     return null;
@@ -650,8 +675,17 @@ function renderReindexButton(row: Api.KnowledgeBase.UploadTask) {
   );
 }
 
+function renderPreviewButton(row: Api.KnowledgeBase.UploadTask) {
+  if (!canPreviewDocument(row)) return null;
+  return (
+    <NButton type="primary" ghost size="small" onClick={() => handleFilePreview(row.fileName)}>
+      预览
+    </NButton>
+  );
+}
+
 function renderDeleteButton(row: Api.KnowledgeBase.UploadTask) {
-  if (!canManageDocument(row)) return null;
+  if (!canDeleteDocument(row)) return null;
   return (
     <NPopconfirm onPositiveClick={() => handleDelete(row.fileMd5)}>
       {{
@@ -678,8 +712,8 @@ async function handleReindex(fileMd5: string) {
 }
 
 async function handleReclean(row: Api.KnowledgeBase.UploadTask) {
-  if (!canManageDocument(row)) {
-    window.$message?.warning('当前账号暂无管理此文档的权限');
+  if (!canRecleanDocument(row)) {
+    window.$message?.warning('当前账号暂无重新清洗此文档的权限');
     return;
   }
   recleaning.value = true;
@@ -713,7 +747,7 @@ async function handleReclean(row: Api.KnowledgeBase.UploadTask) {
 
 // #region 文件续传
 function renderResumeUploadButton(row: Api.KnowledgeBase.UploadTask) {
-  if (row.status === UploadStatus.Break) {
+  if (row.status === UploadStatus.Break && canResumeDocumentUpload(row)) {
     if (row.file)
       return (
         <NButton type="primary" size="small" ghost onClick={() => resumeUpload(row)}>
@@ -739,6 +773,10 @@ function renderResumeUploadButton(row: Api.KnowledgeBase.UploadTask) {
 
 // 任务列表存在文件，直接续传
 async function resumeUpload(row: Api.KnowledgeBase.UploadTask) {
+  if (!canResumeDocumentUpload(row)) {
+    window.$message?.warning('只能续传自己上传中断的文件');
+    return;
+  }
   const ready = await store.checkUploadPreflight();
   if (!ready) return;
   row.uploadError = undefined;
@@ -751,6 +789,10 @@ async function onBeforeUpload(
   row: Api.KnowledgeBase.UploadTask
 ) {
   const md5 = await calculateMD5(options.file.file!);
+  if (!canResumeDocumentUpload(row)) {
+    window.$message?.warning('只能续传自己上传中断的文件');
+    return false;
+  }
   if (md5 !== row.fileMd5) {
     window.$message?.error('两次上传的文件不一致');
     return false;
@@ -1106,7 +1148,7 @@ async function onBeforeUpload(
           <span>当前规则</span>
           <strong>{{ cleaningRuleName(cleaningDetailTask) }}</strong>
         </div>
-        <div v-if="canManageDocument(cleaningDetailTask)" class="detail-actions">
+        <div v-if="canRecleanDocument(cleaningDetailTask)" class="detail-actions">
           <NSelect
             v-model:value="recleanRuleSetId"
             :options="availableCleaningRuleOptions(cleaningDetailTask)"

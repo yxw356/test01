@@ -9,6 +9,8 @@ import com.yuki.enterprise_private_rag_qa.model.User;
 import com.yuki.enterprise_private_rag_qa.repository.OrganizationTagRepository;
 import com.yuki.enterprise_private_rag_qa.repository.UserRepository;
 import com.yuki.enterprise_private_rag_qa.service.ConversationService;
+import com.yuki.enterprise_private_rag_qa.service.FilePermissionAction;
+import com.yuki.enterprise_private_rag_qa.service.RoleFilePermissionService;
 import com.yuki.enterprise_private_rag_qa.service.UserService;
 import com.yuki.enterprise_private_rag_qa.utils.JwtUtils;
 import com.yuki.enterprise_private_rag_qa.utils.LogUtils;
@@ -50,6 +52,9 @@ public class AdminController {
 
     @Autowired
     private ConversationService conversationService;
+
+    @Autowired
+    private RoleFilePermissionService roleFilePermissionService;
 
     /**
      * 获取所有用户列表
@@ -354,6 +359,55 @@ public class AdminController {
             LogUtils.logBusinessError("ADMIN_ASSIGN_USER_ROLE", adminUsername, "更新用户角色异常: %s", e, e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("code", 500, "message", "更新用户角色失败: " + e.getMessage()));
+        }
+    }
+
+    @GetMapping("/role-file-permissions/{role}")
+    public ResponseEntity<?> getRoleFilePermissions(
+            @RequestHeader("Authorization") String token,
+            @PathVariable String role) {
+        String adminUsername = jwtUtils.extractUsernameFromToken(token.replace("Bearer ", ""));
+        validateAdmin(adminUsername);
+
+        try {
+            User.Role targetRole = User.Role.valueOf(role);
+            List<Map<String, Object>> permissions = roleFilePermissionService.listEffectivePermissions(targetRole).stream()
+                    .map(item -> {
+                        Map<String, Object> dto = new HashMap<>();
+                        dto.put("action", item.action().name());
+                        dto.put("allowed", item.allowed());
+                        dto.put("configured", item.configured());
+                        return dto;
+                    })
+                    .collect(Collectors.toList());
+            return ResponseEntity.ok(Map.of("code", 200, "message", "获取角色文件权限成功", "data", permissions));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("code", 400, "message", "无效角色: " + role));
+        } catch (CustomException e) {
+            return ResponseEntity.status(e.getStatus()).body(Map.of("code", e.getStatus().value(), "message", e.getMessage()));
+        }
+    }
+
+    @PutMapping("/role-file-permissions/{role}")
+    public ResponseEntity<?> updateRoleFilePermissions(
+            @RequestHeader("Authorization") String token,
+            @PathVariable String role,
+            @RequestBody RoleFilePermissionUpdateRequest request) {
+        String adminUsername = jwtUtils.extractUsernameFromToken(token.replace("Bearer ", ""));
+        try {
+            validateAdmin(adminUsername);
+            User.Role targetRole = User.Role.valueOf(role);
+            List<RoleFilePermissionService.PermissionUpdate> updates = request.permissions().stream()
+                    .map(item -> new RoleFilePermissionService.PermissionUpdate(item.action(), item.allowed()))
+                    .collect(Collectors.toList());
+            roleFilePermissionService.updateRolePermissions(targetRole, updates);
+            return ResponseEntity.ok(Map.of("code", 200, "message", "角色文件权限已更新"));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("code", 400, "message", "无效角色或权限点: " + role));
+        } catch (CustomException e) {
+            return ResponseEntity.status(e.getStatus()).body(Map.of("code", e.getStatus().value(), "message", e.getMessage()));
         }
     }
     
@@ -698,6 +752,10 @@ record AssignOrgTagsRequest(List<String> orgTags) {}
  * 分配用户角色请求体
  */
 record AssignUserRoleRequest(String role) {}
+
+record RoleFilePermissionItem(FilePermissionAction action, boolean allowed) {}
+
+record RoleFilePermissionUpdateRequest(List<RoleFilePermissionItem> permissions) {}
 
 // 添加组织标签更新请求记录类
 record OrgTagUpdateRequest(String name, String description, String parentTag) {} 

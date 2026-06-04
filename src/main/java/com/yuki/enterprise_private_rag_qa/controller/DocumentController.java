@@ -122,6 +122,12 @@ public class DocumentController {
         dto.put("cleaningQualityScore", file.getCleaningQualityScore());
         dto.put("canView", documentPermissionService.canView(currentUser, file));
         dto.put("canManage", documentPermissionService.canManage(currentUser, file));
+        dto.put("canPreview", documentPermissionService.canPreview(currentUser, file));
+        dto.put("canDownload", documentPermissionService.canDownload(currentUser, file));
+        dto.put("canDelete", documentPermissionService.canDelete(currentUser, file));
+        dto.put("canReclean", documentPermissionService.canReclean(currentUser, file));
+        dto.put("canReindex", documentPermissionService.canReindex(currentUser, file));
+        dto.put("canResumeUpload", documentPermissionService.canResumeUpload(currentUser, file));
         dto.put("createdAt", file.getCreatedAt());
         dto.put("mergedAt", file.getMergedAt());
         String orgTagName = getOrgTagName(documentPermissionService.effectiveDepartmentId(file));
@@ -180,8 +186,8 @@ public class DocumentController {
             
             FileUpload file = fileOpt.get();
             
-            // 权限检查：文件所有者、部门负责人或超级管理员可以删除
-            if (!documentPermissionService.canManage(documentPermissionService.requireUser(userId), file)) {
+            // 权限检查：按动作级权限判断是否可删除
+            if (!documentPermissionService.canDelete(documentPermissionService.requireUser(userId), file)) {
                 LogUtils.logUserOperation(userId, "DELETE_DOCUMENT", fileMd5, "FAILED_PERMISSION_DENIED");
                 LogUtils.logBusiness("DELETE_DOCUMENT", userId, "用户无权删除文档: fileMd5=%s, fileOwner=%s", fileMd5, file.getUserId());
                 monitor.end("删除失败：权限不足");

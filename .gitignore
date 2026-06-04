@@ -82,6 +82,9 @@ src/main/resources/application.yml~
 learn/
 modify/
 .claude/
+data/
+*.mv.db
+*.trace.db
 
 # Dev log files
 backend-dev.err

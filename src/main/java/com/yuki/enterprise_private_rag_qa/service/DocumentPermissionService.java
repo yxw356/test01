@@ -4,6 +4,7 @@ import com.yuki.enterprise_private_rag_qa.exception.CustomException;
 import com.yuki.enterprise_private_rag_qa.model.FileUpload;
 import com.yuki.enterprise_private_rag_qa.model.User;
 import com.yuki.enterprise_private_rag_qa.repository.UserRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
@@ -20,10 +21,18 @@ public class DocumentPermissionService {
 
     private final UserRepository userRepository;
     private final OrgTagCacheService orgTagCacheService;
+    private final RoleFilePermissionService roleFilePermissionService;
 
     public DocumentPermissionService(UserRepository userRepository, OrgTagCacheService orgTagCacheService) {
+        this(userRepository, orgTagCacheService, null);
+    }
+
+    @Autowired
+    public DocumentPermissionService(UserRepository userRepository, OrgTagCacheService orgTagCacheService,
+                                     RoleFilePermissionService roleFilePermissionService) {
         this.userRepository = userRepository;
         this.orgTagCacheService = orgTagCacheService;
+        this.roleFilePermissionService = roleFilePermissionService;
     }
 
     public User requireUser(String userIdOrUsername) {
@@ -58,7 +67,8 @@ public class DocumentPermissionService {
     }
 
     public boolean canUploadPublic(User user) {
-        return user != null && (user.isSuperAdmin() || user.getRole() == User.Role.KNOWLEDGE_ADMIN);
+        boolean defaultAllowed = user != null && (user.isSuperAdmin() || user.getRole() == User.Role.KNOWLEDGE_ADMIN);
+        return roleAllowed(user, FilePermissionAction.UPLOAD_PUBLIC, defaultAllowed);
     }
 
     public boolean canUploadDepartment(User user, String departmentId) {
@@ -66,29 +76,36 @@ public class DocumentPermissionService {
             return false;
         }
         if (user.isSuperAdmin()) {
-            return true;
+            return roleAllowed(user, FilePermissionAction.UPLOAD_DEPARTMENT, true);
         }
-        return user.isDepartmentLead() && userHasDepartment(user, departmentId);
+        boolean defaultAllowed = user.isDepartmentLead() && userHasDepartment(user, departmentId);
+        return roleAllowed(user, FilePermissionAction.UPLOAD_DEPARTMENT, defaultAllowed);
     }
 
     public boolean canView(User user, FileUpload document) {
         if (user == null || document == null) {
             return false;
         }
+        boolean defaultAllowed;
         if (user.isSuperAdmin()) {
-            return true;
+            defaultAllowed = true;
+            return roleAllowed(user, FilePermissionAction.VIEW, defaultAllowed);
         }
         if (Objects.equals(String.valueOf(user.getId()), document.getUserId())) {
-            return true;
+            defaultAllowed = true;
+            return roleAllowed(user, FilePermissionAction.VIEW, defaultAllowed);
         }
         FileUpload.KnowledgeScope scope = effectiveScope(document);
         if (scope == FileUpload.KnowledgeScope.PUBLIC || document.isPublic()) {
-            return true;
+            defaultAllowed = true;
+            return roleAllowed(user, FilePermissionAction.VIEW, defaultAllowed);
         }
         if (scope == FileUpload.KnowledgeScope.PRIVATE) {
-            return false;
+            defaultAllowed = false;
+            return roleAllowed(user, FilePermissionAction.VIEW, defaultAllowed);
         }
-        return userHasDepartment(user, effectiveDepartmentId(document));
+        defaultAllowed = userHasDepartment(user, effectiveDepartmentId(document));
+        return roleAllowed(user, FilePermissionAction.VIEW, defaultAllowed);
     }
 
     public boolean canManage(User user, FileUpload document) {
@@ -101,9 +118,41 @@ public class DocumentPermissionService {
         if (Objects.equals(String.valueOf(user.getId()), document.getUserId())) {
             return true;
         }
+        if ((effectiveScope(document) == FileUpload.KnowledgeScope.PUBLIC || document.isPublic())
+                && user.getRole() == User.Role.KNOWLEDGE_ADMIN) {
+            return true;
+        }
         return effectiveScope(document) == FileUpload.KnowledgeScope.DEPARTMENT
                 && user.isDepartmentLead()
                 && userHasDepartment(user, effectiveDepartmentId(document));
+    }
+
+    public boolean canPreview(User user, FileUpload document) {
+        return roleAllowed(user, FilePermissionAction.PREVIEW, canView(user, document));
+    }
+
+    public boolean canDownload(User user, FileUpload document) {
+        return roleAllowed(user, FilePermissionAction.DOWNLOAD, canView(user, document));
+    }
+
+    public boolean canDelete(User user, FileUpload document) {
+        return roleAllowed(user, FilePermissionAction.DELETE, canManage(user, document));
+    }
+
+    public boolean canReclean(User user, FileUpload document) {
+        return roleAllowed(user, FilePermissionAction.RECLEAN, canManage(user, document) && isCompleted(document));
+    }
+
+    public boolean canReindex(User user, FileUpload document) {
+        return roleAllowed(user, FilePermissionAction.REINDEX, canManage(user, document) && isCompleted(document));
+    }
+
+    public boolean canResumeUpload(User user, FileUpload document) {
+        if (user == null || document == null) {
+            return false;
+        }
+        boolean defaultAllowed = !isCompleted(document) && Objects.equals(String.valueOf(user.getId()), document.getUserId());
+        return roleAllowed(user, FilePermissionAction.RESUME_UPLOAD, defaultAllowed);
     }
 
     public List<String> effectiveDepartmentIds(User user) {
@@ -156,5 +205,16 @@ public class DocumentPermissionService {
             return false;
         }
         return left.equals(right) || left.equalsIgnoreCase(right);
+    }
+
+    private boolean isCompleted(FileUpload document) {
+        return document != null && document.getStatus() == 1;
+    }
+
+    private boolean roleAllowed(User user, FilePermissionAction action, boolean defaultAllowed) {
+        if (roleFilePermissionService == null || user == null) {
+            return defaultAllowed;
+        }
+        return roleFilePermissionService.isAllowed(user.getRole(), action, defaultAllowed);
     }
 }
