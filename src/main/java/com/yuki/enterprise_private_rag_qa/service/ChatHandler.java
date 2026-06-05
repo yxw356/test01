@@ -101,7 +101,7 @@ public class ChatHandler {
         if (!chatConcurrencyLimiter.tryAcquire()) {
             chatStartTimes.remove(session.getId());
             sendErrorMessage(session, "当前问答请求较多，请稍后再试。");
-            sendCompletionNotification(session, List.of());
+            sendCompletionNotification(session, List.of(), userMessage);
             return;
         }
         chatPermitSessions.put(session.getId(), true);

@@ -115,10 +115,10 @@ class DocumentControllerTest {
         cleaningRuleSet.setId(7L);
         cleaningRuleSet.setName("财务清洗规则");
         FileUpload publicDocument = document("2", "public.md", FileUpload.KnowledgeScope.PUBLIC, "OPS", true);
-        when(documentService.getAccessibleFiles("1", "FIN")).thenReturn(List.of(ownDepartmentDocument, publicDocument));
+        when(documentService.getAccessibleFiles("1", "FIN", null)).thenReturn(List.of(ownDepartmentDocument, publicDocument));
         when(cleaningRuleSetRepository.findAllById(any())).thenReturn(List.of(cleaningRuleSet));
 
-        ResponseEntity<?> response = controller.getAccessibleFiles("1", "FIN");
+        ResponseEntity<?> response = controller.getAccessibleFiles("1", "FIN", null);
         Map<String, Object> body = (Map<String, Object>) response.getBody();
         List<Map<String, Object>> data = (List<Map<String, Object>>) body.get("data");
 

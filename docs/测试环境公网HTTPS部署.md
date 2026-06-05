@@ -75,6 +75,50 @@ curl -sI "https://你的隧道域名/" | head -5
 curl -s http://127.0.0.1:8080/ | head -3
 ```
 
+**隧道 URL 保存在** `.run/public-tunnel-url.txt`。重启隧道：
+
+```bash
+./scripts/restart-public-tunnel.sh
+```
+
+### 2.1.1 浏览器「意外终止了连接」
+
+| 原因 | 说明 |
+| --- | --- |
+| 旧 URL 已失效 | 重启 `cloudflared` 后 `*.trycloudflare.com` 会变，勿继续用旧链接 |
+| QUIC 被掐断 | 日志常见 `timeout: no recent network activity`；国内部分运营商/WiFi 对 Cloudflare QUIC 不稳定 |
+| 隧道进程退出 | 关闭终端或 `pkill cloudflared` 后公网立即不可用 |
+
+**处理顺序：**
+
+1. 服务器执行 `./scripts/restart-public-tunnel.sh`，用日志里 **新的** `https://xxxx.trycloudflare.com`。
+2. 本机先测：`curl -sI https://新域名/` 应看到 `HTTP/2 200`（在服务器上测通不代表你手机网络也能通）。
+3. 浏览器仍失败时：**换手机 4G/5G 热点** 或 **VPN** 再打开；或同一 WiFi 下用局域网 `http://服务器局域网IP:9527`（开发模式，见手工启动指南）。
+4. 可选优化（服务器）：`sudo sysctl -w net.core.rmem_max=7500000 net.core.wmem_max=7500000`（`restart-public-tunnel.sh` 会尝试设置）。
+
+> 长期稳定公网请用 **§5 自有域名 + Nginx 443**，勿依赖临时 trycloudflare 链接。
+
+### 2.1.2 隧道反复失败时的替代（推荐内测）
+
+Cloudflare 临时隧道依赖 **QUIC**，在部分网络下即使用新 URL 也会「意外终止连接」；服务器日志可见 `timeout: no recent network activity` / 间歇 **502**。
+
+**优先用下面方式，不依赖 trycloudflare：**
+
+| 场景 | 地址 | 命令 |
+| --- | --- | --- |
+| 同一 WiFi / 内网 | `http://<服务器局域网IP>:8080` 或 `:9527` | `./scripts/start-lan-http.sh` |
+| 公网 IP 直连 | `http://<公网IP>:8080` | 同上 + **安全组放行 TCP 8080** |
+
+```bash
+cd /home/lhagent/test01
+./scripts/start-lan-http.sh
+# 示例：http://192.168.31.43:8080（局域网）
+# 公网需放行 8080 后：http://120.229.12.105:8080（以本机 ifconfig.me 为准）
+```
+
+- `:9527` 为 `pnpm dev`，仅适合内网调试；`:8080` 为 `pnpm build` + Nginx，与公网隧道同源前端。
+- 本机若运行 **mihomo/系统代理**，重启隧道前请用 `./scripts/restart-public-tunnel.sh`（已尝试绕过代理）；仍失败则不要用隧道，改用本节 HTTP。
+
 ### 2.2 方案 B：自签名证书 + 公网 IP（无隧道）
 
 仅适合 **少数人** 用 IP 访问；首次访问浏览器会警告「不安全」。

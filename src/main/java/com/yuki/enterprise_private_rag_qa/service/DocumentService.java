@@ -141,6 +141,7 @@ public class DocumentService {
         
         try {
             User user = documentPermissionService.requireUser(userId);
+            List<String> userEffectiveTags = orgTagCacheService.getUserEffectiveOrgTags(user.getUsername());
             List<FileUpload> files = fileUploadRepository.findAll().stream()
                     .filter(file -> documentPermissionService.canView(user, file))
                     .collect(Collectors.toList());
