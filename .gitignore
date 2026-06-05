@@ -82,6 +82,7 @@ src/main/resources/application.yml~
 learn/
 modify/
 .claude/
+.worktrees/
 data/
 *.mv.db
 *.trace.db
