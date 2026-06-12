@@ -28,7 +28,16 @@ security:
 
 chat:
   redis:
-    enabled: true
+    enabled: false
+
+org-tag:
+  redis:
+    enabled: false
+
+knowledge:
+  upload:
+    redis:
+      enabled: false
 
 rag:
   enabled: true
@@ -36,6 +45,13 @@ rag:
 elasticsearch:
   username:
   password:
+
+management:
+  health:
+    redis:
+      enabled: false
+    elasticsearch:
+      enabled: false
 
 logging:
   level:

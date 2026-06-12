@@ -65,6 +65,9 @@ public class HybridSearchService {
     @Autowired
     private FileUploadRepository fileUploadRepository;
 
+    @Autowired
+    private DocumentLifecycleService documentLifecycleService;
+
     /**
      * 使用文本匹配和向量相似度进行混合搜索，支持权限过滤
      * 该方法确保用户只能搜索其有权限访问的文档（自己的文档、公开文档、所属组织的文档）
@@ -111,6 +114,7 @@ public class HybridSearchService {
             logger.debug("RRF融合和父块聚合完成，语义召回: {}, 关键词召回: {}, 父块结果: {}",
                     semanticResults.size(), keywordResults.size(), results.size());
             attachFileNames(results);
+            results = applyLifecyclePolicy(results);
             if (isSuperAdminUser(userId)) {
                 return results;
             }
@@ -166,6 +170,7 @@ public class HybridSearchService {
 
             logger.debug("返回纯文本搜索结果数量: {}", results.size());
             attachFileNames(results);
+            results = applyLifecyclePolicy(results);
             return applyAccessPolicy(results, userDbId, userEffectiveTags);
         } catch (Exception e) {
             logger.error("纯文本搜索失败", e);
@@ -197,7 +202,7 @@ public class HybridSearchService {
             List<SearchResult> fusedChildResults = rrfFuse(semanticResults, keywordResults, recallK);
             List<SearchResult> results = aggregateByParent(fusedChildResults, topK);
             attachFileNames(results);
-            return results;
+            return applyLifecyclePolicy(results);
         } catch (Exception e) {
             logger.error("搜索失败", e);
             // 发生异常时尝试使用纯文本搜索作为后备方案
@@ -232,7 +237,7 @@ public class HybridSearchService {
                 .toList();
         List<SearchResult> results = aggregateByParent(childResults, topK);
         attachFileNames(results);
-        return results;
+        return applyLifecyclePolicy(results);
     }
 
     // ========================================================================
@@ -388,7 +393,9 @@ public class HybridSearchService {
                 source.getUserId(),
                 source.getOrgTag(),
                 Boolean.TRUE.equals(source.getIsPublic()),
-                source.getFileName()
+                source.getFileName(),
+                source.getKnowledgeScope(),
+                source.getDepartmentId()
         );
     }
 
@@ -490,6 +497,30 @@ public class HybridSearchService {
                         userEffectiveTags
                 ))
                 .toList();
+    }
+
+    private List<SearchResult> applyLifecyclePolicy(List<SearchResult> results) {
+        if (results == null || results.isEmpty()) {
+            return List.of();
+        }
+        try {
+            List<String> md5List = results.stream()
+                    .map(SearchResult::getFileMd5)
+                    .filter(value -> value != null && !value.isBlank())
+                    .distinct()
+                    .toList();
+            if (md5List.isEmpty()) {
+                return List.of();
+            }
+            Map<String, FileUpload> uploadsByMd5 = fileUploadRepository.findByFileMd5In(md5List).stream()
+                    .collect(Collectors.toMap(FileUpload::getFileMd5, file -> file, (left, right) -> left));
+            return results.stream()
+                    .filter(result -> documentLifecycleService.isSearchable(uploadsByMd5.get(result.getFileMd5())))
+                    .toList();
+        } catch (Exception e) {
+            logger.error("按文件生命周期过滤检索结果失败，本次返回空结果以避免命中废止或未审计文件", e);
+            return List.of();
+        }
     }
 
     private SearchResult toSearchResult(Hit<EsSearchDocument> hit) {

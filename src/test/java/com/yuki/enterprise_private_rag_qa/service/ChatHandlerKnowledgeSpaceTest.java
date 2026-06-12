@@ -9,7 +9,6 @@ import org.springframework.data.redis.core.RedisTemplate;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.mockito.Mockito.mock;
 
 class ChatHandlerKnowledgeSpaceTest {
 
@@ -38,14 +37,18 @@ class ChatHandlerKnowledgeSpaceTest {
 
     private ChatHandler handler() {
         return new ChatHandler(
-                mock(RedisTemplate.class),
-                mock(HybridSearchService.class),
-                mock(DeepSeekClient.class),
-                mock(RagPipeline.class),
-                mock(AuditService.class),
-                mock(OperationMetricsService.class),
-                mock(ConversationService.class),
-                mock(ChatConcurrencyLimiter.class),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
                 false,
                 true
         );

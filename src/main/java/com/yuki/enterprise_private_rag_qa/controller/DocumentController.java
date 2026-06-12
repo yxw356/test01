@@ -24,7 +24,9 @@ import com.yuki.enterprise_private_rag_qa.service.AuditService;
 import com.yuki.enterprise_private_rag_qa.service.DocumentPermissionService;
 import com.yuki.enterprise_private_rag_qa.service.DocumentIndexService;
 import com.yuki.enterprise_private_rag_qa.service.DocumentService;
+import com.yuki.enterprise_private_rag_qa.service.DocumentTopologyService;
 import com.yuki.enterprise_private_rag_qa.service.KnowledgeSpaceService;
+import com.yuki.enterprise_private_rag_qa.service.PolicyAuditAgentService;
 import com.yuki.enterprise_private_rag_qa.utils.AuditSupport;
 import com.yuki.enterprise_private_rag_qa.utils.JwtUtils;
 import com.yuki.enterprise_private_rag_qa.utils.LogUtils;
@@ -34,6 +36,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -75,6 +78,12 @@ public class DocumentController {
     @Autowired
     private KnowledgeSpaceService knowledgeSpaceService;
 
+    @Autowired
+    private DocumentTopologyService documentTopologyService;
+
+    @Autowired
+    private PolicyAuditAgentService policyAuditAgentService;
+
     private Optional<FileUpload> findViewableFileByName(String fileName, String userIdOrUsername) {
         List<FileUpload> candidates = fileUploadRepository.findByFileName(fileName);
         if (candidates.isEmpty()) {
@@ -91,6 +100,27 @@ public class DocumentController {
         return candidates.stream()
                 .filter(file -> documentPermissionService.canView(user, file))
                 .findFirst();
+    }
+
+    private Optional<FileUpload> findViewableFile(String fileMd5, String fileName, String userIdOrUsername) {
+        if (fileMd5 != null && !fileMd5.isBlank()) {
+            Optional<FileUpload> fileOpt = fileUploadRepository.findByFileMd5(fileMd5);
+            if (fileOpt.isEmpty()) {
+                return Optional.empty();
+            }
+            FileUpload file = fileOpt.get();
+            if (userIdOrUsername == null || userIdOrUsername.isBlank()) {
+                return documentPermissionService.effectiveScope(file) == FileUpload.KnowledgeScope.PUBLIC || file.isPublic()
+                        ? Optional.of(file)
+                        : Optional.empty();
+            }
+            User user = documentPermissionService.requireUser(userIdOrUsername);
+            return documentPermissionService.canView(user, file) ? Optional.of(file) : Optional.empty();
+        }
+        if (fileName == null || fileName.isBlank()) {
+            return Optional.empty();
+        }
+        return findViewableFileByName(fileName, userIdOrUsername);
     }
 
     private ResponseEntity<Map<String, Object>> notFoundOrForbidden(String message) {
@@ -124,6 +154,17 @@ public class DocumentController {
         dto.put("cleaningQualityStatus", file.getCleaningQualityStatus().name());
         dto.put("cleaningQualityIssues", file.getCleaningQualityIssues());
         dto.put("cleaningQualityScore", file.getCleaningQualityScore());
+        dto.put("effectiveAt", file.getEffectiveAt());
+        dto.put("abolishedAt", file.getAbolishedAt());
+        dto.put("publishedAt", file.getPublishedAt());
+        dto.put("versionNo", file.getVersionNo());
+        dto.put("supersedesFileMd5", file.getSupersedesFileMd5());
+        dto.put("supersededByFileMd5", file.getSupersededByFileMd5());
+        dto.put("lifecycleStatus", file.getLifecycleStatus().name());
+        dto.put("policyAuditStatus", file.getPolicyAuditStatus().name());
+        dto.put("policyAuditScore", file.getPolicyAuditScore());
+        dto.put("policyAuditSummary", file.getPolicyAuditSummary());
+        dto.put("policyAuditIssues", file.getPolicyAuditIssues());
         dto.put("canView", documentPermissionService.canView(currentUser, file));
         dto.put("canManage", documentPermissionService.canManage(currentUser, file));
         dto.put("canPreview", documentPermissionService.canPreview(currentUser, file));
@@ -286,6 +327,182 @@ public class DocumentController {
     }
 
     public record RecleanRequest(Long cleaningRuleSetId) {}
+
+    @GetMapping("/{fileMd5}/audit")
+    public ResponseEntity<?> getPolicyAudit(
+            @PathVariable String fileMd5,
+            @RequestAttribute("userId") String userId) {
+        Optional<FileUpload> fileOpt = fileUploadRepository.findByFileMd5(fileMd5);
+        if (fileOpt.isEmpty()) {
+            return notFoundOrForbidden("文档不存在");
+        }
+        FileUpload file = fileOpt.get();
+        User currentUser = documentPermissionService.requireUser(userId);
+        if (!documentPermissionService.canView(currentUser, file)) {
+            return notFoundOrForbidden("文档不存在或无权限访问");
+        }
+        return ResponseEntity.ok(Map.of(
+                "code", 200,
+                "message", "获取制度审计结果成功",
+                "data", auditDto(file)
+        ));
+    }
+
+    @PostMapping("/{fileMd5}/audit/run")
+    public ResponseEntity<?> runPolicyAudit(
+            @PathVariable String fileMd5,
+            @RequestAttribute("userId") String userId) {
+        Optional<FileUpload> fileOpt = fileUploadRepository.findByFileMd5(fileMd5);
+        if (fileOpt.isEmpty()) {
+            return notFoundOrForbidden("文档不存在");
+        }
+        FileUpload file = fileOpt.get();
+        User currentUser = documentPermissionService.requireUser(userId);
+        if (!documentPermissionService.canManage(currentUser, file)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                    "code", HttpStatus.FORBIDDEN.value(),
+                    "message", "没有权限运行制度审计"
+            ));
+        }
+
+        String content = documentService.getFilePreviewContent(file.getFileMd5(), file.getFileName());
+        PolicyAuditAgentService.AuditResult result = policyAuditAgentService.audit(content);
+        applyAuditResult(file, result.status(), result.score(), result.summary(), String.join("\n", result.issues()));
+        fileUploadRepository.save(file);
+
+        return ResponseEntity.ok(Map.of(
+                "code", 200,
+                "message", "制度审计完成",
+                "data", auditDto(file)
+        ));
+    }
+
+    @PostMapping("/{fileMd5}/audit/review")
+    public ResponseEntity<?> reviewPolicyAudit(
+            @PathVariable String fileMd5,
+            @RequestAttribute("userId") String userId,
+            @RequestBody PolicyAuditReviewRequest request) {
+        Optional<FileUpload> fileOpt = fileUploadRepository.findByFileMd5(fileMd5);
+        if (fileOpt.isEmpty()) {
+            return notFoundOrForbidden("文档不存在");
+        }
+        FileUpload file = fileOpt.get();
+        User currentUser = documentPermissionService.requireUser(userId);
+        if (!documentPermissionService.canManage(currentUser, file)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                    "code", HttpStatus.FORBIDDEN.value(),
+                    "message", "没有权限复核制度审计"
+            ));
+        }
+        applyAuditResult(file, request.status(), request.score(), request.summary(), request.issues());
+        fileUploadRepository.save(file);
+        return ResponseEntity.ok(Map.of(
+                "code", 200,
+                "message", "制度审计复核已保存",
+                "data", auditDto(file)
+        ));
+    }
+
+    private void applyAuditResult(FileUpload file, FileUpload.PolicyAuditStatus status, double score,
+                                  String summary, String issues) {
+        file.setPolicyAuditStatus(status == null ? FileUpload.PolicyAuditStatus.NEED_MANUAL_REVIEW : status);
+        file.setPolicyAuditScore(score);
+        file.setPolicyAuditSummary(summary);
+        file.setPolicyAuditIssues(issues);
+        if (file.getPolicyAuditStatus() == FileUpload.PolicyAuditStatus.REJECT) {
+            file.setLifecycleStatus(FileUpload.LifecycleStatus.AUDIT_REJECTED);
+        } else if (file.getLifecycleStatus() == FileUpload.LifecycleStatus.PENDING_AUDIT
+                || file.getLifecycleStatus() == FileUpload.LifecycleStatus.AUDIT_REJECTED) {
+            file.setLifecycleStatus(FileUpload.LifecycleStatus.APPROVED);
+        }
+    }
+
+    private Map<String, Object> auditDto(FileUpload file) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("fileMd5", file.getFileMd5());
+        data.put("fileName", file.getFileName());
+        data.put("policyAuditStatus", file.getPolicyAuditStatus().name());
+        data.put("policyAuditScore", file.getPolicyAuditScore());
+        data.put("policyAuditSummary", file.getPolicyAuditSummary());
+        data.put("policyAuditIssues", file.getPolicyAuditIssues());
+        data.put("lifecycleStatus", file.getLifecycleStatus().name());
+        return data;
+    }
+
+    public record PolicyAuditReviewRequest(
+            FileUpload.PolicyAuditStatus status,
+            double score,
+            String summary,
+            String issues
+    ) {}
+
+    @PutMapping("/{fileMd5}/lifecycle")
+    public ResponseEntity<?> updateLifecycle(
+            @PathVariable String fileMd5,
+            @RequestAttribute("userId") String userId,
+            @RequestBody LifecycleUpdateRequest request) {
+        Optional<FileUpload> fileOpt = fileUploadRepository.findByFileMd5(fileMd5);
+        if (fileOpt.isEmpty()) {
+            return notFoundOrForbidden("文档不存在");
+        }
+
+        FileUpload file = fileOpt.get();
+        User currentUser = documentPermissionService.requireUser(userId);
+        if (!documentPermissionService.canManage(currentUser, file)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                    "code", HttpStatus.FORBIDDEN.value(),
+                    "message", "没有权限维护文档生命周期"
+            ));
+        }
+
+        file.setEffectiveAt(request.effectiveAt());
+        file.setAbolishedAt(request.abolishedAt());
+        file.setPublishedAt(request.publishedAt());
+        file.setVersionNo(trimToNull(request.versionNo()));
+        file.setSupersedesFileMd5(trimToNull(request.supersedesFileMd5()));
+        file.setSupersededByFileMd5(trimToNull(request.supersededByFileMd5()));
+        if (request.lifecycleStatus() != null) {
+            file.setLifecycleStatus(request.lifecycleStatus());
+        }
+        fileUploadRepository.save(file);
+
+        return ResponseEntity.ok(Map.of(
+                "code", 200,
+                "message", "文档生命周期已保存",
+                "data", lifecycleDto(file)
+        ));
+    }
+
+    private Map<String, Object> lifecycleDto(FileUpload file) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("fileMd5", file.getFileMd5());
+        data.put("fileName", file.getFileName());
+        data.put("effectiveAt", file.getEffectiveAt());
+        data.put("abolishedAt", file.getAbolishedAt());
+        data.put("publishedAt", file.getPublishedAt());
+        data.put("versionNo", file.getVersionNo());
+        data.put("supersedesFileMd5", file.getSupersedesFileMd5());
+        data.put("supersededByFileMd5", file.getSupersededByFileMd5());
+        data.put("lifecycleStatus", file.getLifecycleStatus().name());
+        return data;
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    public record LifecycleUpdateRequest(
+            FileUpload.LifecycleStatus lifecycleStatus,
+            LocalDateTime effectiveAt,
+            LocalDateTime abolishedAt,
+            LocalDateTime publishedAt,
+            String versionNo,
+            String supersedesFileMd5,
+            String supersededByFileMd5
+    ) {}
     
     /**
      * 获取用户可访问的所有文件列表
@@ -349,6 +566,26 @@ public class DocumentController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
         }
     }
+
+    @GetMapping("/topology")
+    public ResponseEntity<?> getDocumentTopology(
+            @RequestAttribute("userId") String userId,
+            @RequestAttribute("orgTags") String orgTags,
+            @RequestParam(value = "orgTag", required = false) String orgTagFilter) {
+        try {
+            List<FileUpload> files = documentService.getAccessibleFiles(userId, orgTags, orgTagFilter);
+            return ResponseEntity.ok(Map.of(
+                    "code", 200,
+                    "message", "获取文件拓扑结构成功",
+                    "data", documentTopologyService.buildTopology(files, userId)
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
+                    "code", HttpStatus.INTERNAL_SERVER_ERROR.value(),
+                    "message", "获取文件拓扑结构失败: " + e.getMessage()
+            ));
+        }
+    }
     
     /**
      * 获取用户上传的所有文件列表
@@ -400,7 +637,8 @@ public class DocumentController {
      */
     @GetMapping("/download")
     public ResponseEntity<?> downloadFileByName(
-            @RequestParam String fileName,
+            @RequestParam(required = false) String fileName,
+            @RequestParam(required = false) String fileMd5,
             @RequestParam(required = false) String token,
             HttpServletRequest httpRequest) {
         
@@ -418,11 +656,12 @@ public class DocumentController {
                 }
             }
             
-            LogUtils.logBusiness("DOWNLOAD_FILE_BY_NAME", userId != null ? userId : "anonymous", "接收到文件下载请求: fileName=%s", fileName);
+            LogUtils.logBusiness("DOWNLOAD_FILE_BY_NAME", userId != null ? userId : "anonymous",
+                    "接收到文件下载请求: fileName=%s, fileMd5=%s", fileName, fileMd5);
             
-            Optional<FileUpload> targetFile = findViewableFileByName(fileName, userId);
+            Optional<FileUpload> targetFile = findViewableFile(fileMd5, fileName, userId);
             if (targetFile.isEmpty()) {
-                LogUtils.logUserOperation(userId, "DOWNLOAD_FILE_BY_NAME", fileName, "FAILED_NOT_FOUND");
+                LogUtils.logUserOperation(userId, "DOWNLOAD_FILE_BY_NAME", fileMd5 != null ? fileMd5 : fileName, "FAILED_NOT_FOUND");
                 monitor.end("下载失败：文件不存在或无权限访问");
                 return notFoundOrForbidden(userId == null ? "文件不存在或需要登录访问" : "文件不存在或无权限访问");
             }
@@ -442,10 +681,10 @@ public class DocumentController {
             }
             
             LogUtils.logFileOperation(userId, "DOWNLOAD", file.getFileName(), file.getFileMd5(), "SUCCESS");
-            LogUtils.logUserOperation(userId, "DOWNLOAD_FILE_BY_NAME", fileName, "SUCCESS");
+            LogUtils.logUserOperation(userId, "DOWNLOAD_FILE_BY_NAME", file.getFileName(), "SUCCESS");
             monitor.end("文件下载链接生成成功");
             auditService.recordSuccess(userId, userId, AuditAction.DOWNLOAD, "document",
-                    file.getFileMd5(), "fileName=" + fileName, AuditSupport.clientIp(httpRequest), null);
+                    file.getFileMd5(), "fileName=" + file.getFileName(), AuditSupport.clientIp(httpRequest), null);
             
             Map<String, Object> response = new HashMap<>();
             response.put("code", 200);
@@ -465,7 +704,7 @@ public class DocumentController {
                 }
             } catch (Exception ignored) {}
             
-            LogUtils.logBusinessError("DOWNLOAD_FILE_BY_NAME", userId, "文件下载失败: fileName=%s", e, fileName);
+            LogUtils.logBusinessError("DOWNLOAD_FILE_BY_NAME", userId, "文件下载失败: fileName=%s, fileMd5=%s", e, fileName, fileMd5);
             monitor.end("下载失败: " + e.getMessage());
             Map<String, Object> response = new HashMap<>();
             response.put("code", HttpStatus.INTERNAL_SERVER_ERROR.value());
@@ -483,7 +722,8 @@ public class DocumentController {
      */
     @GetMapping("/preview")
     public ResponseEntity<?> previewFileByName(
-            @RequestParam String fileName,
+            @RequestParam(required = false) String fileName,
+            @RequestParam(required = false) String fileMd5,
             @RequestParam(required = false) String token,
             HttpServletRequest httpRequest) {
         
@@ -512,11 +752,12 @@ public class DocumentController {
                 }
             }
             
-            LogUtils.logBusiness("PREVIEW_FILE_BY_NAME", userId != null ? userId : "anonymous", "接收到文件预览请求: fileName=%s", fileName);
+            LogUtils.logBusiness("PREVIEW_FILE_BY_NAME", userId != null ? userId : "anonymous",
+                    "接收到文件预览请求: fileName=%s, fileMd5=%s", fileName, fileMd5);
             
-            Optional<FileUpload> targetFile = findViewableFileByName(fileName, userId);
+            Optional<FileUpload> targetFile = findViewableFile(fileMd5, fileName, userId);
             if (targetFile.isEmpty()) {
-                LogUtils.logUserOperation(userId, "PREVIEW_FILE_BY_NAME", fileName, "FAILED_NOT_FOUND");
+                LogUtils.logUserOperation(userId, "PREVIEW_FILE_BY_NAME", fileMd5 != null ? fileMd5 : fileName, "FAILED_NOT_FOUND");
                 monitor.end("预览失败：文件不存在或无权限访问");
                 return notFoundOrForbidden(userId == null ? "文件不存在或需要登录访问" : "文件不存在或无权限访问");
             }
@@ -536,10 +777,10 @@ public class DocumentController {
             }
             
             LogUtils.logFileOperation(userId, "PREVIEW", file.getFileName(), file.getFileMd5(), "SUCCESS");
-            LogUtils.logUserOperation(userId, "PREVIEW_FILE_BY_NAME", fileName, "SUCCESS");
+            LogUtils.logUserOperation(userId, "PREVIEW_FILE_BY_NAME", file.getFileName(), "SUCCESS");
             monitor.end("文件预览内容获取成功");
             auditService.recordSuccess(userId, userId, AuditAction.PREVIEW, "document",
-                    file.getFileMd5(), "fileName=" + fileName, AuditSupport.clientIp(httpRequest), null);
+                    file.getFileMd5(), "fileName=" + file.getFileName(), AuditSupport.clientIp(httpRequest), null);
             
             Map<String, Object> response = new HashMap<>();
             response.put("code", 200);
@@ -559,7 +800,7 @@ public class DocumentController {
                 }
             } catch (Exception ignored) {}
             
-            LogUtils.logBusinessError("PREVIEW_FILE_BY_NAME", userId, "文件预览失败: fileName=%s", e, fileName);
+            LogUtils.logBusinessError("PREVIEW_FILE_BY_NAME", userId, "文件预览失败: fileName=%s, fileMd5=%s", e, fileName, fileMd5);
             monitor.end("预览失败: " + e.getMessage());
             Map<String, Object> response = new HashMap<>();
             response.put("code", HttpStatus.INTERNAL_SERVER_ERROR.value());

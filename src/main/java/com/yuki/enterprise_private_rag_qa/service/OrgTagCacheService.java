@@ -3,17 +3,19 @@ package com.yuki.enterprise_private_rag_qa.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
 import com.yuki.enterprise_private_rag_qa.model.OrganizationTag;
+import com.yuki.enterprise_private_rag_qa.model.User;
 import com.yuki.enterprise_private_rag_qa.repository.OrganizationTagRepository;
+import com.yuki.enterprise_private_rag_qa.repository.UserRepository;
 
 import java.util.List;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -37,6 +39,12 @@ public class OrgTagCacheService {
     
     @Autowired
     private OrganizationTagRepository organizationTagRepository;
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Value("${org-tag.redis.enabled:true}")
+    private boolean redisEnabled;
     
     /**
      * 缓存用户的组织标签
@@ -45,6 +53,9 @@ public class OrgTagCacheService {
      * @param orgTags 组织标签列表
      */
     public void cacheUserOrgTags(String username, List<String> orgTags) {
+        if (!redisEnabled) {
+            return;
+        }
         try {
             String key = USER_ORG_TAGS_KEY_PREFIX + username;
             redisTemplate.opsForList().rightPushAll(key, orgTags.toArray());
@@ -63,6 +74,9 @@ public class OrgTagCacheService {
      */
     @SuppressWarnings("unchecked")
     public List<String> getUserOrgTags(String username) {
+        if (!redisEnabled) {
+            return loadPersistedUserOrgTags(username);
+        }
         try {
             String key = USER_ORG_TAGS_KEY_PREFIX + username;
             List<Object> result = redisTemplate.opsForList().range(key, 0, -1);
@@ -74,7 +88,7 @@ public class OrgTagCacheService {
         } catch (Exception e) {
             logger.error("Failed to get organization tags for user: {}", username, e);
         }
-        return null;
+        return loadPersistedUserOrgTags(username);
     }
     
     /**
@@ -84,6 +98,9 @@ public class OrgTagCacheService {
      * @param primaryOrg 主组织标签
      */
     public void cacheUserPrimaryOrg(String username, String primaryOrg) {
+        if (!redisEnabled) {
+            return;
+        }
         try {
             String key = USER_PRIMARY_ORG_KEY_PREFIX + username;
             redisTemplate.opsForValue().set(key, primaryOrg);
@@ -101,12 +118,15 @@ public class OrgTagCacheService {
      * @return 主组织标签
      */
     public String getUserPrimaryOrg(String username) {
+        if (!redisEnabled) {
+            return loadPersistedUserPrimaryOrg(username);
+        }
         try {
             String key = USER_PRIMARY_ORG_KEY_PREFIX + username;
             return (String) redisTemplate.opsForValue().get(key);
         } catch (Exception e) {
-            logger.error("Failed to get primary organization for user: {}", username, e);
-            return null;
+            logger.warn("Redis unavailable when reading primary organization for user: {}. Falling back to database.", username);
+            return loadPersistedUserPrimaryOrg(username);
         }
     }
     
@@ -116,6 +136,9 @@ public class OrgTagCacheService {
      * @param username 用户名
      */
     public void deleteUserOrgTagsCache(String username) {
+        if (!redisEnabled) {
+            return;
+        }
         try {
             String orgTagsKey = USER_ORG_TAGS_KEY_PREFIX + username;
             String primaryOrgKey = USER_PRIMARY_ORG_KEY_PREFIX + username;
@@ -135,24 +158,26 @@ public class OrgTagCacheService {
      */
     public List<String> getUserEffectiveOrgTags(String username) {
         try {
-            // 从缓存获取
             String cacheKey = USER_EFFECTIVE_TAGS_KEY_PREFIX + username;
-            List<Object> cachedTags = redisTemplate.opsForList().range(cacheKey, 0, -1);
-            
-            if (cachedTags != null && !cachedTags.isEmpty()) {
-                List<String> effectiveTags = cachedTags.stream()
-                        .map(Object::toString)
-                        .collect(Collectors.toList());
-                
-                // 确保默认标签在结果中（从缓存读取的情况）
-                if (!effectiveTags.contains(DEFAULT_ORG_TAG)) {
-                    effectiveTags.add(DEFAULT_ORG_TAG);
+            if (redisEnabled) {
+                // 从缓存获取
+                List<Object> cachedTags = redisTemplate.opsForList().range(cacheKey, 0, -1);
+
+                if (cachedTags != null && !cachedTags.isEmpty()) {
+                    List<String> effectiveTags = cachedTags.stream()
+                            .map(Object::toString)
+                            .collect(Collectors.toCollection(ArrayList::new));
+
+                    // 确保默认标签在结果中（从缓存读取的情况）
+                    if (!effectiveTags.contains(DEFAULT_ORG_TAG)) {
+                        effectiveTags.add(DEFAULT_ORG_TAG);
+                    }
+
+                    return effectiveTags;
                 }
-                
-                return effectiveTags;
             }
             
-            // 缓存未命中，计算有效标签集合
+            // 缓存未命中或本地禁用 Redis，计算有效标签集合
             List<String> userTags = getUserOrgTags(username);
             Set<String> allEffectiveTags = new HashSet<>();
             
@@ -172,16 +197,19 @@ public class OrgTagCacheService {
             List<String> result = new ArrayList<>(allEffectiveTags);
             
             // 缓存结果
-            if (!result.isEmpty()) {
+            if (redisEnabled && !result.isEmpty()) {
                 redisTemplate.opsForList().rightPushAll(cacheKey, result.toArray());
                 redisTemplate.expire(cacheKey, CACHE_TTL_HOURS, TimeUnit.HOURS);
             }
             
             return result;
         } catch (Exception e) {
-            logger.error("Failed to get effective organization tags for user: {}", username, e);
-            // 错误情况下至少返回默认标签
-            return Collections.singletonList(DEFAULT_ORG_TAG);
+            logger.warn("Failed to get effective organization tags for user: {}. Falling back to persisted tags.", username);
+            List<String> persistedTags = loadPersistedUserOrgTags(username);
+            Set<String> result = new HashSet<>(persistedTags);
+            persistedTags.forEach(tag -> collectParentTags(tag, result));
+            result.add(DEFAULT_ORG_TAG);
+            return new ArrayList<>(result);
         }
     }
     
@@ -205,6 +233,9 @@ public class OrgTagCacheService {
      * 删除用户有效标签缓存
      */
     public void deleteUserEffectiveTagsCache(String username) {
+        if (!redisEnabled) {
+            return;
+        }
         try {
             String key = USER_EFFECTIVE_TAGS_KEY_PREFIX + username;
             redisTemplate.delete(key);
@@ -219,6 +250,9 @@ public class OrgTagCacheService {
      * 在组织标签结构变更时调用
      */
     public void invalidateAllEffectiveTagsCache() {
+        if (!redisEnabled) {
+            return;
+        }
         try {
             Set<String> keys = redisTemplate.keys(USER_EFFECTIVE_TAGS_KEY_PREFIX + "*");
             if (keys != null && !keys.isEmpty()) {
@@ -228,5 +262,25 @@ public class OrgTagCacheService {
         } catch (Exception e) {
             logger.error("Failed to invalidate effective organization tags cache", e);
         }
+    }
+
+    private List<String> loadPersistedUserOrgTags(String username) {
+        return userRepository.findByUsername(username)
+                .map(User::getOrgTags)
+                .filter(tags -> tags != null && !tags.isBlank())
+                .map(tags -> List.of(tags.split(",")))
+                .orElse(List.of())
+                .stream()
+                .map(String::trim)
+                .filter(tag -> !tag.isEmpty())
+                .distinct()
+                .collect(Collectors.toList());
+    }
+
+    private String loadPersistedUserPrimaryOrg(String username) {
+        return userRepository.findByUsername(username)
+                .map(User::getPrimaryOrg)
+                .filter(primaryOrg -> primaryOrg != null && !primaryOrg.isBlank())
+                .orElse(null);
     }
 } 

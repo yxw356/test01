@@ -23,6 +23,7 @@ import reactor.core.Disposable;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -47,6 +48,10 @@ public class ChatHandler {
     private final OperationMetricsService operationMetricsService;
     private final ConversationService conversationService;
     private final ChatConcurrencyLimiter chatConcurrencyLimiter;
+    private final KnowledgeFaqService knowledgeFaqService;
+    private final KnowledgeTermService knowledgeTermService;
+    private final KnowledgeCaseService knowledgeCaseService;
+    private final KnowledgeFaqSuggestionService knowledgeFaqSuggestionService;
     private final boolean redisEnabled;
     private final boolean ragEnabled;
     
@@ -73,6 +78,10 @@ public class ChatHandler {
                       OperationMetricsService operationMetricsService,
                       ConversationService conversationService,
                       ChatConcurrencyLimiter chatConcurrencyLimiter,
+                      KnowledgeFaqService knowledgeFaqService,
+                      KnowledgeTermService knowledgeTermService,
+                      KnowledgeCaseService knowledgeCaseService,
+                      KnowledgeFaqSuggestionService knowledgeFaqSuggestionService,
                       @Value("${chat.redis.enabled:true}") boolean redisEnabled,
                       @Value("${rag.enabled:true}") boolean ragEnabled) {
         this.redisTemplate = redisTemplate;
@@ -83,6 +92,10 @@ public class ChatHandler {
         this.operationMetricsService = operationMetricsService;
         this.conversationService = conversationService;
         this.chatConcurrencyLimiter = chatConcurrencyLimiter;
+        this.knowledgeFaqService = knowledgeFaqService;
+        this.knowledgeTermService = knowledgeTermService;
+        this.knowledgeCaseService = knowledgeCaseService;
+        this.knowledgeFaqSuggestionService = knowledgeFaqSuggestionService;
         this.redisEnabled = redisEnabled;
         this.ragEnabled = ragEnabled;
         this.objectMapper = new ObjectMapper();
@@ -125,9 +138,18 @@ public class ChatHandler {
             // 3. 格式化对话历史（供 RAG Pipeline 使用）
             String chatHistoryStr = formatChatHistory(history);
 
-            // 4. 执行 RAG Pipeline（Stage 1→2→3→4）
+            // 4. 标准问答优先命中。命中后直接输出，避免模型二次改写标准答案。
+            var faqMatch = knowledgeFaqService.findExactMatch(userMessage, userId);
+            if (faqMatch.isPresent()) {
+                completeImmediateAnswer(userId, conversationId, userMessage, session, faqMatch.get().answer());
+                return;
+            }
+
+            String expandedUserMessage = knowledgeTermService.expandQuery(userMessage, userId);
+
+            // 5. 执行 RAG Pipeline（Stage 1→2→3→4）
             RagPipeline.RagResult ragResult = ragEnabled
-                    ? ragPipeline.execute(userMessage, userId, chatHistoryStr)
+                    ? ragPipeline.execute(expandedUserMessage, userId, chatHistoryStr)
                     : emptyRagResult();
             logger.info("RAG Pipeline completed. finalDocs={}, intent={}, usedSupplementary={}, isFallback={}",
                     ragResult.finalDocs().size(),
@@ -135,14 +157,14 @@ public class ChatHandler {
                     ragResult.usedSupplementaryRetrieval(),
                     ragResult.isFallback());
 
-            // 5. 按知识分区过滤、补充文件名并构建上下文
+            // 6. 按知识分区过滤、补充文件名并构建上下文
             List<SearchResult> finalDocs = filterByKnowledgeSpace(ragResult.finalDocs(), knowledgeSpaceContext);
             searchService.enrichWithFileNames(finalDocs);
-            String context = buildContext(userMessage, finalDocs);
+            String context = buildTermAwareContext(userMessage, userId, finalDocs);
             sessionRetrievalResults.put(sessionId, finalDocs);
             logger.info("RAG context built, contextLength: {}", context.length());
 
-            // 6. 调用 DeepSeek API 并处理流式响应
+            // 7. 调用 DeepSeek API 并处理流式响应
             logger.info("调用DeepSeek API生成回复");
             Disposable stream = deepSeekClient.streamResponse(userMessage, context, history,
                 chunk -> {
@@ -239,6 +261,8 @@ public class ChatHandler {
 
         if (!completeResponse.isBlank()) {
             persistConversationTurn(userId, conversationId, userMessage, completeResponse, retrievalResults);
+            knowledgeFaqSuggestionService.recordCandidate(userId, userMessage, completeResponse,
+                    retrievalResults == null ? List.of() : retrievalResults);
             String redisKey = "user:" + userId + ":current_conversation";
             logger.info("对话存储信息 - Redis键: {}, 值: {}", redisKey, conversationId);
         } else {
@@ -246,6 +270,31 @@ public class ChatHandler {
         }
 
         logger.info("消息处理完成，用户ID: {}", userId);
+    }
+
+    private void completeImmediateAnswer(String userId,
+                                         String conversationId,
+                                         String userMessage,
+                                         WebSocketSession session,
+                                         String answer) {
+        String sessionId = session.getId();
+        try {
+            responseBuilders.computeIfAbsent(sessionId, ignored -> new StringBuilder()).append(answer);
+            sendResponseChunk(session, answer);
+            sessionRetrievalResults.put(sessionId, List.of());
+            sendCompletionNotification(session, List.of(), userMessage);
+            persistConversationTurn(userId, conversationId, userMessage, answer, List.of());
+            Long startedAt = chatStartTimes.remove(sessionId);
+            if (startedAt != null) {
+                operationMetricsService.recordChatDuration(System.currentTimeMillis() - startedAt);
+            }
+        } finally {
+            activeStreams.remove(sessionId);
+            activeResponses.remove(sessionId);
+            responseBuilders.remove(sessionId);
+            sessionRetrievalResults.remove(sessionId);
+            releaseChatPermit(sessionId);
+        }
     }
 
     private void cleanupActiveStream(String sessionId) {
@@ -397,15 +446,90 @@ public class ChatHandler {
         }
 
         StringBuilder context = new StringBuilder();
-        for (int i = 0; i < searchResults.size(); i++) {
-            SearchResult result = searchResults.get(i);
-            String snippet = ContextSnippetUtils.extractExcerpt(query, result);
-            String fileLabel = result.getFileName() != null && !result.getFileName().isBlank()
-                    ? result.getFileName()
-                    : (result.getFileMd5() != null ? result.getFileMd5() : "unknown");
-            context.append(String.format("[来源#%d: %s]\n%s\n\n", i + 1, fileLabel, snippet));
+        context.append("【回答任务】\n")
+                .append("1. 先识别用户问题中的对象、条件、流程、时间、数值、责任主体。\n")
+                .append("2. 再从下列文件证据中逐项匹配依据，综合多个片段后回答。\n")
+                .append("3. 如果问题要求准确数据、制度条款、流程边界，必须优先抽取原文事实，再解释含义。\n")
+                .append("4. 如果证据不足，请明确说明缺少哪类依据，不要编造。\n\n")
+                .append("【推荐回答结构】\n")
+                .append("- 直接结论：先回答用户最关心的结果。\n")
+                .append("- 依据拆解：按条件、对象、时间、责任人、例外情况展开。\n")
+                .append("- 执行建议：如果用户问“怎么做”，给出可操作步骤。\n")
+                .append("- 适用边界：涉及生效、废止、版本、部门范围时必须说明。\n\n");
+        if (isWeakEvidence(searchResults)) {
+            context.append("【证据质量提示】\n")
+                    .append("本轮检索证据较少或相关度偏弱。若下列片段不能直接支持答案，")
+                    .append("请回答“知识库没有找到足够依据”，并说明建议补充哪些文件或关键词；不要根据常识推断企业内部制度。\n\n");
+        }
+
+        Map<String, List<SearchResult>> grouped = new LinkedHashMap<>();
+        for (SearchResult result : searchResults) {
+            String fileKey = result.getFileMd5() != null ? result.getFileMd5() : "unknown-" + grouped.size();
+            grouped.computeIfAbsent(fileKey, ignored -> new ArrayList<>()).add(result);
+        }
+
+        int sourceIndex = 1;
+        for (Map.Entry<String, List<SearchResult>> entry : grouped.entrySet()) {
+            SearchResult first = entry.getValue().get(0);
+            String fileLabel = first.getFileName() != null && !first.getFileName().isBlank()
+                    ? first.getFileName()
+                    : entry.getKey();
+            context.append(String.format("【文件证据包#%d】%s\n", sourceIndex, fileLabel));
+            context.append("文件MD5: ").append(entry.getKey()).append("\n");
+            context.append("来源定位: 回答结束后系统会展示此文件，可供用户点击核查；正文不需要重复文件名。\n");
+            if (first.getKnowledgeScope() != null) {
+                context.append("知识范围: ").append(first.getKnowledgeScope()).append("\n");
+            }
+            if (first.getDepartmentId() != null && !first.getDepartmentId().isBlank()) {
+                context.append("所属部门: ").append(first.getDepartmentId()).append("\n");
+            }
+            for (int i = 0; i < entry.getValue().size(); i++) {
+                SearchResult result = entry.getValue().get(i);
+                String snippet = ContextSnippetUtils.extractExcerpt(query, result);
+                context.append(String.format("- 片段%d", i + 1));
+                if (result.getScore() != null) {
+                    context.append(String.format("（相关度 %.3f）", result.getScore()));
+                }
+                context.append(": ").append(snippet).append("\n");
+            }
+            context.append("\n");
+            sourceIndex++;
         }
         return context.toString();
+    }
+
+    private boolean isWeakEvidence(List<SearchResult> searchResults) {
+        if (searchResults == null || searchResults.isEmpty()) {
+            return true;
+        }
+        double maxScore = searchResults.stream()
+                .map(SearchResult::getScore)
+                .filter(score -> score != null)
+                .mapToDouble(Double::doubleValue)
+                .max()
+                .orElse(1.0d);
+        int contentLength = searchResults.stream()
+                .map(result -> ContextSnippetUtils.extractExcerpt("", result, 220))
+                .mapToInt(String::length)
+                .sum();
+        return searchResults.size() < 2 && maxScore < 0.2d || contentLength < 80;
+    }
+
+    private String buildTermAwareContext(String query, String userId, List<SearchResult> searchResults) {
+        String termContext = knowledgeTermService.buildMatchedTermContext(query, userId);
+        String caseContext = knowledgeCaseService.buildMatchedCaseContext(query, userId);
+        String retrievalContext = buildContext(query, searchResults);
+        List<String> sections = new ArrayList<>();
+        if (!termContext.isBlank()) {
+            sections.add(termContext);
+        }
+        if (!caseContext.isBlank()) {
+            sections.add(caseContext);
+        }
+        if (!retrievalContext.isBlank()) {
+            sections.add(retrievalContext);
+        }
+        return String.join("\n", sections);
     }
 
     private RagPipeline.RagResult emptyRagResult() {

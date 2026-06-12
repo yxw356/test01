@@ -6,6 +6,7 @@ import org.apache.commons.codec.digest.DigestUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
@@ -50,6 +51,9 @@ public class UploadService {
 
     @Autowired
     private String minioPublicUrl; // 注入 MinIO 的公共访问地址
+
+    @Value("${knowledge.upload.redis.enabled:true}")
+    private boolean uploadRedisEnabled;
 
     /**
      * 上传文件分片
@@ -362,15 +366,18 @@ public class UploadService {
                 logger.error("无效的分片索引 => fileMd5: {}, chunkIndex: {}", fileMd5, chunkIndex);
                 throw new IllegalArgumentException("chunkIndex must be non-negative");
             }
+            if (!uploadRedisEnabled) {
+                return isChunkRecordedInDatabase(fileMd5, chunkIndex);
+            }
             String redisKey = "upload:" + userId + ":" + fileMd5;
             boolean isUploaded = redisTemplate.opsForValue().getBit(redisKey, chunkIndex);
             logger.debug("分片上传状态 => fileMd5: {}, chunkIndex: {}, userId: {}, isUploaded: {}", 
                       fileMd5, chunkIndex, userId, isUploaded);
             return isUploaded;
         } catch (Exception e) {
-            logger.error("检查分片上传状态失败 => fileMd5: {}, chunkIndex: {}, userId: {}, 错误: {}", 
-                      fileMd5, chunkIndex, userId, e.getMessage(), e);
-            return false; // 或者根据业务需求返回其他值
+            logger.warn("检查分片上传状态失败，改用数据库分片记录兜底 => fileMd5: {}, chunkIndex: {}, userId: {}, 错误: {}",
+                      fileMd5, chunkIndex, userId, e.getMessage());
+            return isChunkRecordedInDatabase(fileMd5, chunkIndex);
         }
     }
 
@@ -388,13 +395,16 @@ public class UploadService {
                 logger.error("无效的分片索引 => fileMd5: {}, chunkIndex: {}", fileMd5, chunkIndex);
                 throw new IllegalArgumentException("chunkIndex must be non-negative");
             }
+            if (!uploadRedisEnabled) {
+                logger.debug("Redis分片状态已关闭，分片状态将以数据库chunk_info记录为准 => fileMd5: {}, chunkIndex: {}", fileMd5, chunkIndex);
+                return;
+            }
             String redisKey = "upload:" + userId + ":" + fileMd5;
             redisTemplate.opsForValue().setBit(redisKey, chunkIndex, true);
             logger.debug("分片已标记为已上传 => fileMd5: {}, chunkIndex: {}, userId: {}", fileMd5, chunkIndex, userId);
         } catch (Exception e) {
-            logger.error("标记分片为已上传失败 => fileMd5: {}, chunkIndex: {}, userId: {}, 错误: {}", 
-                      fileMd5, chunkIndex, userId, e.getMessage(), e);
-            throw new RuntimeException("Failed to mark chunk as uploaded", e);
+            logger.warn("标记Redis分片状态失败，继续依赖数据库chunk_info记录 => fileMd5: {}, chunkIndex: {}, userId: {}, 错误: {}",
+                      fileMd5, chunkIndex, userId, e.getMessage());
         }
     }
 
@@ -407,12 +417,15 @@ public class UploadService {
     public void deleteFileMark(String fileMd5, String userId) {
         logger.debug("删除文件所有分片上传标记 => fileMd5: {}, userId: {}", fileMd5, userId);
         try {
+            if (!uploadRedisEnabled) {
+                logger.debug("Redis分片状态已关闭，无需删除Redis标记 => fileMd5: {}, userId: {}", fileMd5, userId);
+                return;
+            }
             String redisKey = "upload:" + userId + ":" + fileMd5;
             redisTemplate.delete(redisKey);
             logger.info("文件分片上传标记已删除 => fileMd5: {}, userId: {}", fileMd5, userId);
         } catch (Exception e) {
-            logger.error("删除文件分片上传标记失败 => fileMd5: {}, userId: {}, 错误: {}", fileMd5, userId, e.getMessage(), e);
-            throw new RuntimeException("Failed to delete file mark", e);
+            logger.warn("删除Redis分片上传标记失败，数据库记录不受影响 => fileMd5: {}, userId: {}, 错误: {}", fileMd5, userId, e.getMessage());
         }
     }
 
@@ -435,6 +448,13 @@ public class UploadService {
                 logger.warn("文件总分片数为0 => fileMd5: {}, userId: {}", fileMd5, userId);
                 return uploadedChunks;
             }
+
+            if (!uploadRedisEnabled) {
+                List<Integer> databaseChunks = getUploadedChunksFromDatabase(fileMd5, totalChunks);
+                logger.info("Redis分片状态已关闭，从数据库获取已上传分片 => fileMd5: {}, userId: {}, 已上传数量: {}, 总分片数: {}",
+                        fileMd5, userId, databaseChunks.size(), totalChunks);
+                return databaseChunks;
+            }
             
             // 优化：一次性获取所有分片状态
             String redisKey = "upload:" + userId + ":" + fileMd5;
@@ -444,7 +464,7 @@ public class UploadService {
             
             if (bitmapData == null) {
                 logger.info("Redis中无分片状态记录 => fileMd5: {}, userId: {}", fileMd5, userId);
-                return uploadedChunks;
+                return getUploadedChunksFromDatabase(fileMd5, totalChunks);
             }
             
             // 解析bitmap，找出已上传的分片
@@ -458,9 +478,23 @@ public class UploadService {
                       fileMd5, userId, uploadedChunks.size(), totalChunks);
             return uploadedChunks;
         } catch (Exception e) {
-            logger.error("获取已上传分片列表失败 => fileMd5: {}, userId: {}, 错误: {}", fileMd5, userId, e.getMessage(), e);
-            throw new RuntimeException("Failed to get uploaded chunks", e);
+            logger.warn("获取Redis分片列表失败，改用数据库分片记录兜底 => fileMd5: {}, userId: {}, 错误: {}", fileMd5, userId, e.getMessage());
+            return getUploadedChunksFromDatabase(fileMd5, Integer.MAX_VALUE);
         }
+    }
+
+    private boolean isChunkRecordedInDatabase(String fileMd5, int chunkIndex) {
+        return chunkInfoRepository.findByFileMd5OrderByChunkIndexAsc(fileMd5).stream()
+                .anyMatch(chunk -> chunk.getChunkIndex() == chunkIndex);
+    }
+
+    private List<Integer> getUploadedChunksFromDatabase(String fileMd5, int totalChunks) {
+        return chunkInfoRepository.findByFileMd5OrderByChunkIndexAsc(fileMd5).stream()
+                .map(ChunkInfo::getChunkIndex)
+                .filter(index -> index >= 0 && index < totalChunks)
+                .distinct()
+                .sorted()
+                .collect(Collectors.toList());
     }
 
     /**

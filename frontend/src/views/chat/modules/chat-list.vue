@@ -10,7 +10,7 @@ defineOptions({
 });
 
 const chatStore = useChatStore();
-const { list, previewVisible, previewFileName } = storeToRefs(chatStore);
+const { list, previewVisible, previewFileName, previewFileMd5 } = storeToRefs(chatStore);
 
 const suggestedQuestions = [
   '查询最新报销制度中的审批流程',
@@ -106,9 +106,10 @@ function fillQuestion(question: string) {
       @after-leave="chatStore.closeFilePreview"
     >
       <FilePreview
-        v-if="previewFileName"
+        v-if="previewFileName || previewFileMd5"
         in-modal
         :file-name="previewFileName"
+        :file-md5="previewFileMd5"
         :visible="previewVisible"
         @close="chatStore.closeFilePreview"
       />

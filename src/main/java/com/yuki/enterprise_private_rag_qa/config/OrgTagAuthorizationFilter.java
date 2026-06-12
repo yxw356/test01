@@ -65,10 +65,16 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
                 path.matches(".*/documents/uploads.*") ||
                 path.matches(".*/documents/accessible.*") ||
                 path.matches(".*/documents/knowledge-spaces.*") ||
+                path.matches(".*/documents/topology.*") ||
+                path.matches(".*/knowledge-assistant.*") ||
+                path.matches(".*/knowledge-training.*") ||
                 path.matches(".*/knowledge-categories.*") ||
                 path.matches(".*/data-cleaning.*") ||
                 path.matches(".*/search/hybrid.*") ||
                 path.matches(".*/users/password.*") ||
+                (path.matches(".*/documents/[a-fA-F0-9]{32}/lifecycle.*")
+                        && "PUT".equals(request.getMethod())) ||
+                path.matches(".*/documents/[a-fA-F0-9]{32}/audit.*") ||
                 (path.matches(".*/documents/[a-fA-F0-9]{32}(/(reindex|reclean))?.*")
                         && ("DELETE".equals(request.getMethod()) || "POST".equals(request.getMethod())))) {
                 
@@ -87,6 +93,12 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
                     operation = "获取可访问文档";
                 } else if (path.contains("/knowledge-spaces")) {
                     operation = "获取知识库分区";
+                } else if (path.contains("/documents/topology")) {
+                    operation = "获取文件拓扑结构";
+                } else if (path.contains("/knowledge-assistant")) {
+                    operation = "知识助手治理配置";
+                } else if (path.contains("/knowledge-training")) {
+                    operation = "知识培训生成";
                 } else if (path.contains("/knowledge-categories")) {
                     operation = "管理知识分类";
                 } else if (path.contains("/data-cleaning")) {
@@ -95,6 +107,10 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
                     operation = "混合检索";
                 } else if (path.contains("/users/password")) {
                     operation = "修改密码";
+                } else if ("PUT".equals(request.getMethod()) && path.contains("/lifecycle")) {
+                    operation = "维护文档生命周期";
+                } else if (path.contains("/audit")) {
+                    operation = "制度审计";
                 } else if ("DELETE".equals(request.getMethod()) && path.matches(".*/documents/[a-fA-F0-9]{32}.*")) {
                     operation = "删除文档";
                 } else if ("POST".equals(request.getMethod()) && path.contains("/reindex")) {

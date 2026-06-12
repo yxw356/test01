@@ -125,6 +125,65 @@ public class FileUpload {
     private double cleaningQualityScore = 1.0d;
 
     /**
+     * 文件生效时间。为空时兼容历史文件，视为已生效。
+     */
+    @Column(name = "effective_at")
+    private LocalDateTime effectiveAt;
+
+    /**
+     * 文件废止时间。到达该时间后，默认不再进入知识助手检索。
+     */
+    @Column(name = "abolished_at")
+    private LocalDateTime abolishedAt;
+
+    /**
+     * 文件发布或批准时间。
+     */
+    @Column(name = "published_at")
+    private LocalDateTime publishedAt;
+
+    /**
+     * 制度版本号。
+     */
+    @Column(name = "version_no", length = 64)
+    private String versionNo;
+
+    /**
+     * 当前文件替代的旧文件MD5。
+     */
+    @Column(name = "supersedes_file_md5", length = 32)
+    private String supersedesFileMd5;
+
+    /**
+     * 当前文件被哪个新文件替代。
+     */
+    @Column(name = "superseded_by_file_md5", length = 32)
+    private String supersededByFileMd5;
+
+    /**
+     * 生命周期状态。历史文件默认 ACTIVE，避免升级后全部不可见。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "lifecycle_status", nullable = false)
+    private LifecycleStatus lifecycleStatus = LifecycleStatus.ACTIVE;
+
+    /**
+     * 制度审计状态。历史文件默认 PASS，后续上传的制度文件再走审计准入。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "policy_audit_status", nullable = false)
+    private PolicyAuditStatus policyAuditStatus = PolicyAuditStatus.PASS;
+
+    @Column(name = "policy_audit_score", nullable = false)
+    private double policyAuditScore = 100.0d;
+
+    @Column(name = "policy_audit_summary", length = 1024)
+    private String policyAuditSummary;
+
+    @Column(name = "policy_audit_issues", columnDefinition = "TEXT")
+    private String policyAuditIssues;
+
+    /**
      * 文件是否公开
      * true表示所有用户可访问，false表示仅组织内用户可访问
      */
@@ -160,6 +219,26 @@ public class FileUpload {
         OK,
         WARNING,
         FAILED
+    }
+
+    public enum LifecycleStatus {
+        DRAFT,
+        PENDING_AUDIT,
+        AUDIT_REJECTED,
+        APPROVED,
+        ACTIVE,
+        EXPIRED,
+        REVOKED,
+        SUPERSEDED
+    }
+
+    public enum PolicyAuditStatus {
+        NOT_REQUIRED,
+        PENDING,
+        PASS,
+        PASS_WITH_WARNINGS,
+        REJECT,
+        NEED_MANUAL_REVIEW
     }
 
     /** 对外展示的上传状态：已合并或已进入索引流程则视为上传完成 */

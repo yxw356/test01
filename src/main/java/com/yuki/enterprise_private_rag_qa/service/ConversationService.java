@@ -20,15 +20,18 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class ConversationService {
 
     private static final Logger logger = LoggerFactory.getLogger(ConversationService.class);
     private static final DateTimeFormatter TIMESTAMP_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
+    private static final int MAX_CITATIONS = 8;
 
     private final ConversationRepository conversationRepository;
     private final UserRepository userRepository;
@@ -56,7 +59,7 @@ public class ConversationService {
         conversation.setQuestion(question);
         conversation.setAnswer(answer);
         conversation.setSessionId(sessionId);
-        conversation.setRetrievalCitations(serializeCitations(retrievalResults));
+        conversation.setRetrievalCitations(serializeCitations(retrievalResults, question));
         conversationRepository.save(conversation);
         logger.info("对话已落库: user={}, sessionId={}, citations={}",
                 username, sessionId, retrievalResults == null ? 0 : retrievalResults.size());
@@ -96,8 +99,17 @@ public class ConversationService {
             return List.of();
         }
         List<RetrievalCitation> citations = new ArrayList<>();
-        for (int i = 0; i < results.size(); i++) {
-            citations.add(RetrievalCitation.fromSearchResult(i + 1, results.get(i), query));
+        Set<String> seen = new HashSet<>();
+        for (SearchResult result : results) {
+            String key = (result.getFileMd5() == null ? result.getFileName() : result.getFileMd5())
+                    + ":" + (result.getChunkId() == null ? result.getParentId() : result.getChunkId());
+            if (!seen.add(key)) {
+                continue;
+            }
+            citations.add(RetrievalCitation.fromSearchResult(citations.size() + 1, result, query));
+            if (citations.size() >= MAX_CITATIONS) {
+                break;
+            }
         }
         return citations;
     }
@@ -165,8 +177,8 @@ public class ConversationService {
         return message;
     }
 
-    private String serializeCitations(List<SearchResult> retrievalResults) {
-        List<RetrievalCitation> citations = buildCitations(retrievalResults);
+    private String serializeCitations(List<SearchResult> retrievalResults, String query) {
+        List<RetrievalCitation> citations = buildCitations(retrievalResults, query);
         if (citations.isEmpty()) {
             return null;
         }

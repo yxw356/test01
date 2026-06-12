@@ -282,6 +282,25 @@ declare namespace Api {
       cleaningQualityStatus?: 'OK' | 'WARNING' | 'FAILED';
       cleaningQualityIssues?: string | null;
       cleaningQualityScore?: number;
+      effectiveAt?: string | null;
+      abolishedAt?: string | null;
+      publishedAt?: string | null;
+      versionNo?: string | null;
+      supersedesFileMd5?: string | null;
+      supersededByFileMd5?: string | null;
+      lifecycleStatus?:
+        | 'DRAFT'
+        | 'PENDING_AUDIT'
+        | 'AUDIT_REJECTED'
+        | 'APPROVED'
+        | 'ACTIVE'
+        | 'EXPIRED'
+        | 'REVOKED'
+        | 'SUPERSEDED';
+      policyAuditStatus?: 'NOT_REQUIRED' | 'PENDING' | 'PASS' | 'PASS_WITH_WARNINGS' | 'REJECT' | 'NEED_MANUAL_REVIEW';
+      policyAuditScore?: number;
+      policyAuditSummary?: string | null;
+      policyAuditIssues?: string | null;
       public: boolean;
       isPublic: boolean;
       canView?: boolean;
@@ -326,6 +345,220 @@ declare namespace Api {
       objectUrl: string;
       fileSize: number;
     }
+
+    interface AssistantFaq {
+      id: number;
+      question: string;
+      answer: string;
+      aliases?: string | null;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      departmentId?: string | null;
+      enabled: boolean;
+      createdAt?: string;
+      updatedAt?: string;
+    }
+
+    interface AssistantTerm {
+      id: number;
+      term: string;
+      definition?: string | null;
+      synonyms?: string | null;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      departmentId?: string | null;
+      enabled: boolean;
+      createdAt?: string;
+      updatedAt?: string;
+    }
+
+    interface AssistantFaqSuggestion {
+      id: number;
+      question: string;
+      suggestedAnswer?: string | null;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      departmentId?: string | null;
+      evidenceCount: number;
+      hitCount: number;
+      status: 'PENDING' | 'ACCEPTED' | 'IGNORED';
+      lastAskedAt?: string | null;
+      updatedAt?: string | null;
+    }
+
+    interface AssistantCase {
+      id: number;
+      title: string;
+      scenario: string;
+      handling: string;
+      conclusion: string;
+      tags?: string | null;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      departmentId?: string | null;
+      status: 'DRAFT' | 'APPROVED' | 'ARCHIVED';
+      enabled: boolean;
+      createdAt?: string;
+      updatedAt?: string;
+    }
+
+    interface CasePolicyDraft {
+      title: string;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT';
+      departmentId?: string | null;
+      caseCount: number;
+      sourceCaseIds: number[];
+      draft: string;
+      generatedAt: string;
+    }
+
+    interface DocumentTopologyNode {
+      id: string;
+      fileMd5: string;
+      fileName: string;
+      label?: string;
+      nodeType?: 'DOCUMENT' | 'FAQ' | 'CASE' | 'TERM' | string;
+      group?: string;
+      riskLevel?: 'NONE' | 'LOW' | 'MEDIUM' | 'HIGH' | string;
+      symbolSize?: number;
+      x?: number;
+      y?: number;
+      versionNo?: string | null;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+      departmentId?: string | null;
+      categoryId?: number | null;
+      categoryName?: string | null;
+      lifecycleStatus: UploadTask['lifecycleStatus'];
+      policyAuditStatus: UploadTask['policyAuditStatus'];
+      effectiveAt?: string | null;
+      abolishedAt?: string | null;
+      publishedAt?: string | null;
+      retrievable: boolean;
+      supersedesFileMd5?: string | null;
+      supersededByFileMd5?: string | null;
+    }
+
+    interface DocumentTopologyEdge {
+      id: string;
+      source: string;
+      target: string;
+      type: 'SUPERSEDES' | 'SAME_DEPARTMENT' | 'SAME_CATEGORY' | 'SAME_LIFECYCLE';
+      label: string;
+      weight?: number;
+      description?: string;
+      curveness?: number;
+    }
+
+    interface DocumentTopology {
+      nodes: DocumentTopologyNode[];
+      edges: DocumentTopologyEdge[];
+      summary: {
+        nodeCount: number;
+        edgeCount: number;
+        supersedesEdgeCount?: number;
+        departmentEdgeCount?: number;
+        categoryEdgeCount?: number;
+        activeCount: number;
+        expiredCount: number;
+        auditIssueCount: number;
+      };
+    }
+
+    interface PolicyAuditDetail {
+      fileMd5: string;
+      fileName: string;
+      policyAuditStatus: UploadTask['policyAuditStatus'];
+      policyAuditScore: number;
+      policyAuditSummary?: string | null;
+      policyAuditIssues?: string | null;
+      lifecycleStatus: UploadTask['lifecycleStatus'];
+    }
+
+    interface TrainingQuizQuestion {
+      type: 'single_choice' | 'multiple_choice' | string;
+      difficulty: string;
+      question: string;
+      options: string[];
+      answer: string[] | string;
+      explanation: string;
+      sourceFile: string;
+    }
+
+    interface TrainingQuizResult {
+      title: string;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT';
+      departmentId?: string | null;
+      difficulty: string;
+      questionCount: number;
+      questions: TrainingQuizQuestion[];
+      rawContent?: string;
+      sources: Array<{
+        fileMd5: string;
+        fileName: string;
+        knowledgeScope: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+        departmentId?: string | null;
+        versionNo?: string | null;
+      }>;
+      generatedAt: string;
+    }
+
+    interface TrainingExamSubmitResult {
+      attemptId: number;
+      title: string;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT';
+      departmentId?: string | null;
+      score: number;
+      correctCount: number;
+      totalCount: number;
+      durationSeconds?: number | null;
+      submittedAt: string;
+      reviews: Array<{
+        index: number;
+        type: string;
+        question: string;
+        expected: string[];
+        actual: string[];
+        correct: boolean;
+        explanation: string;
+        sourceFile: string;
+      }>;
+    }
+
+    interface TrainingExamRankingRow {
+      rank: number;
+      attemptId: number;
+      username: string;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT';
+      departmentId?: string | null;
+      score: number;
+      correctCount: number;
+      totalCount: number;
+      durationSeconds?: number | null;
+      submittedAt: string;
+    }
+
+    interface TrainingDeckSlide {
+      index: number;
+      title: string;
+      bullets: string[];
+      speakerNotes: string;
+      sourceFiles: string[];
+    }
+
+    interface TrainingDeckResult {
+      title: string;
+      audience: string;
+      knowledgeScope: 'PUBLIC' | 'DEPARTMENT';
+      departmentId?: string | null;
+      tone: string;
+      slideCount: number;
+      slides: TrainingDeckSlide[];
+      rawContent?: string;
+      sources: Array<{
+        fileMd5: string;
+        fileName: string;
+        knowledgeScope: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE';
+        departmentId?: string | null;
+        versionNo?: string | null;
+      }>;
+      generatedAt: string;
+    }
   }
 
   namespace Chat {
@@ -358,6 +591,8 @@ declare namespace Api {
       parentId?: string;
       score?: number;
       snippet?: string;
+      previewUrl?: string;
+      downloadUrl?: string;
     }
 
     interface Token {

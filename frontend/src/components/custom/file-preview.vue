@@ -7,6 +7,7 @@ import SvgIcon from '@/components/custom/svg-icon.vue';
 
 interface Props {
   fileName: string;
+  fileMd5?: string;
   visible: boolean;
   /** 嵌入弹窗时去掉侧栏样式 */
   inModal?: boolean;
@@ -36,9 +37,9 @@ const content = ref('');
 const error = ref('');
 
 watch(
-  () => props.fileName,
+  () => [props.fileName, props.fileMd5],
   async newFileName => {
-    if (newFileName && props.visible) {
+    if ((newFileName[0] || newFileName[1]) && props.visible) {
       await loadPreviewContent();
     }
   },
@@ -48,14 +49,14 @@ watch(
 watch(
   () => props.visible,
   async visible => {
-    if (visible && props.fileName) {
+    if (visible && (props.fileName || props.fileMd5)) {
       await loadPreviewContent();
     }
   }
 );
 
 async function loadPreviewContent() {
-  if (!props.fileName) return;
+  if (!props.fileName && !props.fileMd5) return;
 
   loading.value = true;
   error.value = '';
@@ -70,7 +71,8 @@ async function loadPreviewContent() {
     }>({
       url: '/documents/preview',
       params: {
-        fileName: props.fileName,
+        fileName: props.fileName || undefined,
+        fileMd5: props.fileMd5 || undefined,
         token: token || undefined
       }
     });
@@ -91,7 +93,7 @@ async function loadPreviewContent() {
 }
 
 async function downloadFile() {
-  if (!props.fileName) return;
+  if (!props.fileName && !props.fileMd5) return;
 
   downloading.value = true;
 
@@ -104,7 +106,8 @@ async function downloadFile() {
     }>({
       url: '/documents/download',
       params: {
-        fileName: props.fileName,
+        fileName: props.fileName || undefined,
+        fileMd5: props.fileMd5 || undefined,
         token: token || undefined
       }
     });

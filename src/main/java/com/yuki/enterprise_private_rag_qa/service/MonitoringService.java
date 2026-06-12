@@ -74,6 +74,9 @@ public class MonitoringService {
     @Value("${knowledge.upload.max-file-size:200MB}")
     private DataSize maxUploadFileSize;
 
+    @Value("${knowledge.upload.redis.enabled:true}")
+    private boolean uploadRedisEnabled;
+
     public MonitoringService(ElasticsearchClient esClient,
                              RedisTemplate<String, String> redisTemplate,
                              OperationMetricsService metricsService,
@@ -120,11 +123,14 @@ public class MonitoringService {
     public Map<String, Object> collectUploadPreflightStatus() {
         Map<String, Object> components = new LinkedHashMap<>();
         components.put("minio", checkMinio());
-        components.put("redis", checkRedis());
+        components.put("redis", uploadRedisEnabled ? checkRedis() : skipped("local upload resume uses database fallback"));
         components.put("kafka", checkKafkaAvailability());
 
         List<String> unavailable = components.entrySet().stream()
-                .filter(entry -> !"UP".equals(String.valueOf(((Map<?, ?>) entry.getValue()).get("status"))))
+                .filter(entry -> {
+                    String status = String.valueOf(((Map<?, ?>) entry.getValue()).get("status"));
+                    return !"UP".equals(status) && !"SKIPPED".equals(status);
+                })
                 .map(Map.Entry::getKey)
                 .toList();
 
@@ -139,6 +145,13 @@ public class MonitoringService {
         result.put("message", ready
                 ? "上传服务已就绪"
                 : "上传依赖未启动：" + String.join("、", unavailable));
+        return result;
+    }
+
+    private Map<String, Object> skipped(String detail) {
+        Map<String, Object> result = new HashMap<>();
+        result.put("status", "SKIPPED");
+        result.put("detail", detail);
         return result;
     }
 

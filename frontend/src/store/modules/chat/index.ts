@@ -33,15 +33,18 @@ export const useChatStore = defineStore(SetupStoreId.Chat, () => {
 
   const previewVisible = ref(false);
   const previewFileName = ref('');
+  const previewFileMd5 = ref('');
 
-  function openFilePreview(fileName: string) {
+  function openFilePreview(fileName: string, fileMd5 = '') {
     previewFileName.value = fileName;
+    previewFileMd5.value = fileMd5;
     previewVisible.value = true;
   }
 
   function closeFilePreview() {
     previewVisible.value = false;
     previewFileName.value = '';
+    previewFileMd5.value = '';
   }
 
   return {
@@ -56,6 +59,7 @@ export const useChatStore = defineStore(SetupStoreId.Chat, () => {
     scrollToBottom,
     previewVisible,
     previewFileName,
+    previewFileMd5,
     openFilePreview,
     closeFilePreview,
     isActiveChat

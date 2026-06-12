@@ -26,6 +26,7 @@ public class DocumentIndexService {
     private final DocumentService documentService;
     private final FileIndexStatusService fileIndexStatusService;
     private final DocumentPermissionService documentPermissionService;
+    private final DocumentLifecycleService documentLifecycleService;
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private final KafkaConfig kafkaConfig;
 
@@ -33,12 +34,14 @@ public class DocumentIndexService {
                                 DocumentService documentService,
                                 FileIndexStatusService fileIndexStatusService,
                                 DocumentPermissionService documentPermissionService,
+                                DocumentLifecycleService documentLifecycleService,
                                 KafkaTemplate<String, Object> kafkaTemplate,
                                 KafkaConfig kafkaConfig) {
         this.fileUploadRepository = fileUploadRepository;
         this.documentService = documentService;
         this.fileIndexStatusService = fileIndexStatusService;
         this.documentPermissionService = documentPermissionService;
+        this.documentLifecycleService = documentLifecycleService;
         this.kafkaTemplate = kafkaTemplate;
         this.kafkaConfig = kafkaConfig;
     }
@@ -122,8 +125,15 @@ public class DocumentIndexService {
         if (!allowed) {
             throw new CustomException("没有权限" + actionName + "此文档", HttpStatus.FORBIDDEN);
         }
+        ensureSearchableForIndexing(file);
 
         return file;
+    }
+
+    private void ensureSearchableForIndexing(FileUpload file) {
+        if (!documentLifecycleService.isSearchable(file)) {
+            throw new CustomException("文件未生效、已废止或审计未通过，不能纳入知识库检索", HttpStatus.BAD_REQUEST);
+        }
     }
 
     private FileUpload resolveFile(String fileMd5) {

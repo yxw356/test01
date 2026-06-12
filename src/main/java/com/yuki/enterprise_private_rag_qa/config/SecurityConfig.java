@@ -61,6 +61,12 @@ public class SecurityConfig {
                             // 搜索接口 - 普通用户和管理员都可访问
                             .requestMatchers("/api/search/**")
                             .hasAnyRole("USER", "DEPT_MEMBER", "DEPT_LEAD", "KNOWLEDGE_ADMIN", "SUPER_ADMIN", "ADMIN")
+                            // 知识助手治理配置 - 问答对、术语词典按服务层继续细分管理权限
+                            .requestMatchers("/api/v1/knowledge-assistant/**")
+                            .hasAnyRole("USER", "DEPT_MEMBER", "DEPT_LEAD", "KNOWLEDGE_ADMIN", "SUPER_ADMIN", "ADMIN")
+                            // 知识培训生成 - 复用知识库权限，只能基于当前用户可见文件生成
+                            .requestMatchers("/api/v1/knowledge-training/**")
+                            .hasAnyRole("USER", "DEPT_MEMBER", "DEPT_LEAD", "KNOWLEDGE_ADMIN", "SUPER_ADMIN", "ADMIN")
                             // 聊天相关接口 - WebSocket停止Token获取 (允许匿名访问)
                             .requestMatchers("/api/chat/websocket-token").permitAll()
                             // 用户管理列表和创建账号允许超级管理员、兼容管理员、部门负责人访问，服务层继续细分权限

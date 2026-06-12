@@ -1,6 +1,7 @@
 package com.yuki.enterprise_private_rag_qa.service;
 
 import com.yuki.enterprise_private_rag_qa.config.KafkaConfig;
+import com.yuki.enterprise_private_rag_qa.exception.CustomException;
 import com.yuki.enterprise_private_rag_qa.model.FileIndexStatus;
 import com.yuki.enterprise_private_rag_qa.model.FileProcessingTask;
 import com.yuki.enterprise_private_rag_qa.model.FileUpload;
@@ -12,13 +13,16 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.kafka.core.KafkaOperations;
 import org.springframework.kafka.core.KafkaTemplate;
 
+import java.time.LocalDateTime;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -28,6 +32,7 @@ class DocumentIndexServiceTest {
     private DocumentService documentService;
     private FileIndexStatusService fileIndexStatusService;
     private DocumentPermissionService documentPermissionService;
+    private DocumentLifecycleService documentLifecycleService;
     private KafkaTemplate<String, Object> kafkaTemplate;
     private KafkaConfig kafkaConfig;
     private DocumentIndexService service;
@@ -38,6 +43,7 @@ class DocumentIndexServiceTest {
         documentService = mock(DocumentService.class);
         fileIndexStatusService = mock(FileIndexStatusService.class);
         documentPermissionService = mock(DocumentPermissionService.class);
+        documentLifecycleService = new DocumentLifecycleService();
         kafkaTemplate = mock(KafkaTemplate.class);
         kafkaConfig = mock(KafkaConfig.class);
         service = new DocumentIndexService(
@@ -45,6 +51,7 @@ class DocumentIndexServiceTest {
                 documentService,
                 fileIndexStatusService,
                 documentPermissionService,
+                documentLifecycleService,
                 kafkaTemplate,
                 kafkaConfig
         );
@@ -97,6 +104,45 @@ class DocumentIndexServiceTest {
         verify(fileIndexStatusService).markPending(file.getFileMd5(), file.getUserId());
     }
 
+    @Test
+    void retryIndexingRejectsAuditRejectedFile() {
+        FileUpload file = completedFile();
+        file.setPolicyAuditStatus(FileUpload.PolicyAuditStatus.REJECT);
+        file.setLifecycleStatus(FileUpload.LifecycleStatus.AUDIT_REJECTED);
+        User operator = operator();
+
+        when(fileUploadRepository.findByFileMd5(file.getFileMd5())).thenReturn(Optional.of(file));
+        when(documentPermissionService.requireUser("99")).thenReturn(operator);
+        when(documentPermissionService.canReindex(operator, file)).thenReturn(true);
+
+        CustomException error = assertThrows(CustomException.class,
+                () -> service.retryIndexing(file.getFileMd5(), "99", "DEPT_LEAD"));
+
+        assertEquals("文件未生效、已废止或审计未通过，不能纳入知识库检索", error.getMessage());
+        verify(kafkaTemplate, never()).send(any(), any());
+        verify(fileIndexStatusService, never()).markPending(any(), any());
+    }
+
+    @Test
+    void retryCleaningAndIndexingRejectsExpiredFile() {
+        FileUpload file = completedFile();
+        file.setAbolishedAt(LocalDateTime.now().minusDays(1));
+        file.setLifecycleStatus(FileUpload.LifecycleStatus.EXPIRED);
+        User operator = operator();
+
+        when(fileUploadRepository.findByFileMd5(file.getFileMd5())).thenReturn(Optional.of(file));
+        when(documentPermissionService.requireUser("99")).thenReturn(operator);
+        when(documentPermissionService.canReclean(operator, file)).thenReturn(true);
+
+        CustomException error = assertThrows(CustomException.class,
+                () -> service.retryCleaningAndIndexing(file.getFileMd5(), "99", "DEPT_LEAD"));
+
+        assertEquals("文件未生效、已废止或审计未通过，不能纳入知识库检索", error.getMessage());
+        verify(fileUploadRepository, never()).save(file);
+        verify(kafkaTemplate, never()).send(any(), any());
+        verify(fileIndexStatusService, never()).markPending(any(), any());
+    }
+
     private FileUpload completedFile() {
         FileUpload file = new FileUpload();
         file.setFileMd5("abc123abc123abc123abc123abc123ab");
@@ -116,5 +162,13 @@ class DocumentIndexServiceTest {
         file.setIndexStatus(FileIndexStatus.FAILED);
         file.setIndexError("old error");
         return file;
+    }
+
+    private User operator() {
+        User operator = new User();
+        operator.setId(99L);
+        operator.setUsername("lead");
+        operator.setRole(User.Role.DEPT_LEAD);
+        return operator;
     }
 }

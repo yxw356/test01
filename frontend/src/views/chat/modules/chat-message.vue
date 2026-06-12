@@ -23,6 +23,7 @@ const sourceFiles = ref<Array<{fileName: string, id: string}>>([]);
 
 // 处理来源文件链接的函数
 function processSourceLinks(text: string): string {
+  sourceFiles.value = [];
   // 匹配 (来源#数字: 文件名) 的正则表达式
   const sourcePattern = /\(来源#(\d+):\s*([^)]+)\)/g;
 
@@ -86,6 +87,48 @@ function openFilePreview(fileName: string) {
 async function handleSourceFileClick(fileName: string) {
   openFilePreview(fileName);
 }
+
+function openCitation(citation: Api.Chat.RetrievalCitation) {
+  const params = parseCitationUrlParams(citation.previewUrl);
+  const fileMd5 = params.fileMd5 || citation.fileMd5 || '';
+  const fileName = params.fileName || citationDisplayName(citation);
+  if (!fileName && !fileMd5) return;
+  chatStore.openFilePreview(fileName, fileMd5);
+}
+
+function citationDisplayName(citation: Api.Chat.RetrievalCitation) {
+  if (citation.fileName?.trim()) return citation.fileName.trim();
+  const inferred = inferFileNameFromSnippet(citation.snippet || '');
+  return inferred || '知识库文件';
+}
+
+function inferFileNameFromSnippet(snippet: string) {
+  if (!snippet) return '';
+  const fileNameMatch = snippet.match(
+    /(?:文件名称|文件名|制度名称)[:：]\s*(.{2,80}?)(?=文件编号|生效日期|状态|文件版本|页数|版号|编制人|审核人|批准人|\s|。|；|;|，|,|《|》|$)/
+  );
+  if (fileNameMatch?.[1]) return sanitizeCitationName(fileNameMatch[1]);
+  const bookTitleMatch = snippet.match(/《([^》]{2,80})》/);
+  if (bookTitleMatch?.[1]) return sanitizeCitationName(bookTitleMatch[1]);
+  return '';
+}
+
+function sanitizeCitationName(name: string) {
+  return name.replace(/[\s　]+/g, '').replace(/^(公司|江西龙汇肉制品有限责任公司)/, '').trim();
+}
+
+function parseCitationUrlParams(url?: string) {
+  if (!url) return { fileName: '', fileMd5: '' };
+  try {
+    const parsed = new URL(url, window.location.origin);
+    return {
+      fileName: parsed.searchParams.get('fileName') || '',
+      fileMd5: parsed.searchParams.get('fileMd5') || ''
+    };
+  } catch {
+    return { fileName: '', fileMd5: '' };
+  }
+}
 </script>
 
 <template>
@@ -121,14 +164,26 @@ async function handleSourceFileClick(fileName: string) {
               v-for="citation in visibleCitations"
               :key="citation.index"
               class="citation-item"
-              @click.stop="citation.fileName && openFilePreview(citation.fileName)"
+              role="button"
+              tabindex="0"
+              @click.stop="openCitation(citation)"
+              @keydown.enter.stop.prevent="openCitation(citation)"
             >
               <div class="citation-title">
                 <span class="citation-index">#{{ citation.index }}</span>
-                <span class="citation-name">{{ citation.fileName || '未知文件' }}</span>
+                <span class="citation-name">{{ citationDisplayName(citation) }}</span>
+                <NTag v-if="citation.chunkId != null" size="small" :bordered="false">
+                  片段 {{ citation.chunkId }}
+                </NTag>
                 <NTag v-if="citation.score != null" size="small" :bordered="false" type="info">
                   {{ citation.score.toFixed(3) }}
                 </NTag>
+                <NButton size="tiny" text type="primary" class="citation-open">
+                  打开
+                  <template #icon>
+                    <icon-mdi-open-in-new />
+                  </template>
+                </NButton>
               </div>
               <p v-if="citation.snippet" class="citation-snippet">{{ citation.snippet }}</p>
             </div>
@@ -350,6 +405,11 @@ async function handleSourceFileClick(fileName: string) {
   &:hover {
     border-color: rgb(var(--primary-color) / 0.35);
   }
+
+  &:focus-visible {
+    outline: 2px solid rgb(var(--primary-color) / 0.45);
+    outline-offset: 2px;
+  }
 }
 
 .citation-title {
@@ -368,6 +428,10 @@ async function handleSourceFileClick(fileName: string) {
 .citation-name {
   font-size: 13px;
   font-weight: 500;
+}
+
+.citation-open {
+  margin-left: auto;
 }
 
 .citation-snippet {
