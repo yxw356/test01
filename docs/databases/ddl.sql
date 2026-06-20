@@ -91,3 +91,73 @@ CREATE TABLE conversations (
 ALTER TABLE file_upload
     ADD COLUMN index_status TINYINT NOT NULL DEFAULT 2 COMMENT '0待索引 1索引中 2已索引 3失败' AFTER status,
     ADD COLUMN index_error VARCHAR(512) DEFAULT NULL COMMENT '索引失败原因' AFTER index_status;
+
+CREATE TABLE IF NOT EXISTS knowledge_space (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    space_id VARCHAR(80) NOT NULL UNIQUE,
+    type VARCHAR(24) NOT NULL,
+    name VARCHAR(120) NOT NULL,
+    department_id VARCHAR(80) DEFAULT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='知识空间';
+
+CREATE TABLE IF NOT EXISTS user_knowledge_space_layout (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL UNIQUE,
+    space_order TEXT NOT NULL,
+    collapsed_spaces TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户知识空间布局';
+
+CREATE TABLE IF NOT EXISTS knowledge_category (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(80) NOT NULL,
+    parent_id BIGINT DEFAULT NULL,
+    knowledge_scope VARCHAR(24) NOT NULL,
+    department_id VARCHAR(50) DEFAULT NULL,
+    description VARCHAR(255) DEFAULT NULL,
+    sort_order INT NOT NULL DEFAULT 100,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by VARCHAR(64) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='知识分类';
+
+CREATE TABLE IF NOT EXISTS cleaning_rule_set (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    knowledge_scope VARCHAR(24) NOT NULL,
+    department_id VARCHAR(50) DEFAULT NULL,
+    description VARCHAR(255) DEFAULT NULL,
+    normalize_line_breaks BOOLEAN NOT NULL DEFAULT TRUE,
+    normalize_unicode_spaces BOOLEAN NOT NULL DEFAULT TRUE,
+    normalize_whitespace BOOLEAN NOT NULL DEFAULT TRUE,
+    trim_lines BOOLEAN NOT NULL DEFAULT TRUE,
+    collapse_blank_lines BOOLEAN NOT NULL DEFAULT TRUE,
+    remove_duplicate_lines BOOLEAN NOT NULL DEFAULT TRUE,
+    min_duplicate_line_length INT NOT NULL DEFAULT 8,
+    drop_line_patterns LONGTEXT,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by VARCHAR(64) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='清洗规则集';
+
+ALTER TABLE file_upload
+    ADD COLUMN knowledge_scope VARCHAR(24) NOT NULL DEFAULT 'DEPARTMENT' COMMENT 'PUBLIC/DEPARTMENT/PRIVATE' AFTER org_tag,
+    ADD COLUMN department_id VARCHAR(80) DEFAULT NULL AFTER knowledge_scope,
+    ADD COLUMN space_id VARCHAR(80) DEFAULT NULL AFTER department_id,
+    ADD COLUMN category_id BIGINT DEFAULT NULL AFTER space_id,
+    ADD COLUMN category_name VARCHAR(120) DEFAULT NULL AFTER category_id,
+    ADD COLUMN cleaning_rule_set_id BIGINT DEFAULT NULL AFTER category_name,
+    ADD COLUMN cleaning_status VARCHAR(24) NOT NULL DEFAULT 'PENDING' AFTER cleaning_rule_set_id,
+    ADD COLUMN original_chars INT NOT NULL DEFAULT 0 AFTER cleaning_status,
+    ADD COLUMN cleaned_chars INT NOT NULL DEFAULT 0 AFTER original_chars,
+    ADD COLUMN removed_chars INT NOT NULL DEFAULT 0 AFTER cleaned_chars,
+    ADD COLUMN duplicate_lines_removed INT NOT NULL DEFAULT 0 AFTER removed_chars,
+    ADD COLUMN cleaning_quality_status VARCHAR(24) NOT NULL DEFAULT 'OK' AFTER duplicate_lines_removed,
+    ADD COLUMN cleaning_quality_issues VARCHAR(512) DEFAULT NULL AFTER cleaning_quality_status,
+    ADD COLUMN cleaning_quality_score DOUBLE NOT NULL DEFAULT 1.0 AFTER cleaning_quality_issues;

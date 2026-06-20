@@ -135,7 +135,7 @@ public class ChatHandler {
                     ragResult.isFallback());
 
             // 5. 构建上下文
-            List<SearchResult> finalDocs = filterByKnowledgeSpace(ragResult.finalDocs(), knowledgeSpaceContext);
+            List<SearchResult> finalDocs = filterByKnowledgeSpace(ragResult.finalDocs(), knowledgeSpaceContext, userId);
             String context = buildContext(finalDocs);
             sessionRetrievalResults.put(sessionId, finalDocs);
             logger.info("RAG context built, contextLength: {}", context.length());
@@ -185,23 +185,15 @@ public class ChatHandler {
         }
     }
 
-    List<SearchResult> filterByKnowledgeSpace(List<SearchResult> results, KnowledgeSpaceContext context) {
-        if (results == null || results.isEmpty() || context == null || context.knowledgeScope() == null || context.knowledgeScope().isBlank()) {
+    List<SearchResult> filterByKnowledgeSpace(List<SearchResult> results, KnowledgeSpaceContext context, String userId) {
+        if (context == null) {
             return results == null ? List.of() : results;
         }
-        String scope = context.knowledgeScope().trim();
-        if ("PUBLIC".equalsIgnoreCase(scope)) {
-            return results.stream()
-                    .filter(result -> "PUBLIC".equalsIgnoreCase(result.getKnowledgeScope()) || Boolean.TRUE.equals(result.getIsPublic()))
-                    .toList();
-        }
-        if ("DEPARTMENT".equalsIgnoreCase(scope) && context.departmentId() != null && !context.departmentId().isBlank()) {
-            return results.stream()
-                    .filter(result -> "DEPARTMENT".equalsIgnoreCase(result.getKnowledgeScope()))
-                    .filter(result -> context.departmentId().equals(result.getDepartmentId()) || context.departmentId().equals(result.getOrgTag()))
-                    .toList();
-        }
-        return results;
+        return KnowledgeSpaceFilter.filter(results, userId, context.knowledgeScope(), context.departmentId());
+    }
+
+    List<SearchResult> filterByKnowledgeSpace(List<SearchResult> results, KnowledgeSpaceContext context) {
+        return filterByKnowledgeSpace(results, context, null);
     }
 
     public record KnowledgeSpaceContext(String knowledgeScope, String departmentId) {

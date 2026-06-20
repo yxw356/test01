@@ -75,6 +75,17 @@ public class HybridSearchService {
      * @return 搜索结果列表
      */
     public List<SearchResult> searchWithPermission(String query, String userId, int topK) {
+        return searchWithPermission(query, userId, topK, null, null);
+    }
+
+    public List<SearchResult> searchWithPermission(String query, String userId, int topK,
+                                                   String knowledgeScope, String departmentId) {
+        List<SearchResult> results = searchWithPermissionInternal(query, userId, topK);
+        String userDbId = getUserDbId(userId);
+        return KnowledgeSpaceFilter.filter(results, userDbId, knowledgeScope, departmentId);
+    }
+
+    private List<SearchResult> searchWithPermissionInternal(String query, String userId, int topK) {
         logger.debug("开始带权限搜索，查询: {}, 用户ID: {}", query, userId);
         
         try {

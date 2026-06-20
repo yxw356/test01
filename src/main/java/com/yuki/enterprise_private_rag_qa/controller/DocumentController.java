@@ -24,6 +24,7 @@ import com.yuki.enterprise_private_rag_qa.service.AuditService;
 import com.yuki.enterprise_private_rag_qa.service.DocumentPermissionService;
 import com.yuki.enterprise_private_rag_qa.service.DocumentIndexService;
 import com.yuki.enterprise_private_rag_qa.service.DocumentService;
+import com.yuki.enterprise_private_rag_qa.service.KnowledgeSpaceLayoutService;
 import com.yuki.enterprise_private_rag_qa.service.KnowledgeSpaceService;
 import com.yuki.enterprise_private_rag_qa.utils.AuditSupport;
 import com.yuki.enterprise_private_rag_qa.utils.JwtUtils;
@@ -74,6 +75,9 @@ public class DocumentController {
 
     @Autowired
     private KnowledgeSpaceService knowledgeSpaceService;
+
+    @Autowired
+    private KnowledgeSpaceLayoutService knowledgeSpaceLayoutService;
 
     private Optional<FileUpload> findViewableFileByName(String fileName, String userIdOrUsername) {
         List<FileUpload> candidates = fileUploadRepository.findByFileName(fileName);
@@ -347,6 +351,51 @@ public class DocumentController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
         }
     }
+
+    @GetMapping("/knowledge-space-layout")
+    public ResponseEntity<?> getKnowledgeSpaceLayout(@RequestAttribute("userId") String userId) {
+        try {
+            User currentUser = documentPermissionService.requireUser(userId);
+            KnowledgeSpaceLayoutService.LayoutDto layout =
+                    knowledgeSpaceLayoutService.getLayout(String.valueOf(currentUser.getId()));
+            return ResponseEntity.ok(Map.of(
+                    "code", 200,
+                    "message", "获取知识空间布局成功",
+                    "data", layout
+            ));
+        } catch (Exception e) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("code", HttpStatus.INTERNAL_SERVER_ERROR.value());
+            response.put("message", "获取知识空间布局失败: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+        }
+    }
+
+    @PutMapping("/knowledge-space-layout")
+    public ResponseEntity<?> saveKnowledgeSpaceLayout(@RequestAttribute("userId") String userId,
+                                                      @RequestBody KnowledgeSpaceLayoutRequest request) {
+        try {
+            User currentUser = documentPermissionService.requireUser(userId);
+            KnowledgeSpaceLayoutService.LayoutDto layout = knowledgeSpaceLayoutService.saveLayout(
+                    String.valueOf(currentUser.getId()),
+                    request.spaceOrder(),
+                    request.collapsedSpaces()
+            );
+            return ResponseEntity.ok(Map.of(
+                    "code", 200,
+                    "message", "保存知识空间布局成功",
+                    "data", layout
+            ));
+        } catch (Exception e) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("code", HttpStatus.INTERNAL_SERVER_ERROR.value());
+            response.put("message", "保存知识空间布局失败: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+        }
+    }
+
+    public record KnowledgeSpaceLayoutRequest(List<String> spaceOrder, List<String> collapsedSpaces) {
+    }
     
     /**
      * 获取用户上传的所有文件列表
@@ -483,6 +532,7 @@ public class DocumentController {
     @GetMapping("/preview")
     public ResponseEntity<?> previewFileByName(
             @RequestParam String fileName,
+            @RequestParam(required = false) Integer chunkId,
             @RequestParam(required = false) String token,
             HttpServletRequest httpRequest) {
         
@@ -522,8 +572,8 @@ public class DocumentController {
             
             FileUpload file = targetFile.get();
             
-            // 获取文件预览内容
-            String previewContent = documentService.getFilePreviewContent(file.getFileMd5(), file.getFileName());
+            Map<String, Object> previewData = documentService.getFilePreviewData(file.getFileMd5(), file.getFileName(), chunkId);
+            String previewContent = (String) previewData.get("content");
             
             if (previewContent == null) {
                 LogUtils.logUserOperation(userId, "PREVIEW_FILE_BY_NAME", fileName, "FAILED_GET_CONTENT");
@@ -543,11 +593,7 @@ public class DocumentController {
             Map<String, Object> response = new HashMap<>();
             response.put("code", 200);
             response.put("message", "文件预览内容获取成功");
-            response.put("data", Map.of(
-                "fileName", file.getFileName(),
-                "content", previewContent,
-                "fileSize", file.getTotalSize()
-            ));
+            response.put("data", previewData);
             return ResponseEntity.ok(response);
             
         } catch (Exception e) {

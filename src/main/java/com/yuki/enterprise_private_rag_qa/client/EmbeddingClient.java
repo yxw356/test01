@@ -26,7 +26,7 @@ public class EmbeddingClient {
     @Value("${embedding.api.batch-size:100}")
     private int batchSize;
 
-    @Value("${embedding.api.dimension:2048}")
+    @Value("${embedding.api.dimension:1024}")
     private int dimension;
     
     private static final Logger logger = LoggerFactory.getLogger(EmbeddingClient.class);

@@ -65,6 +65,7 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
                 path.matches(".*/documents/uploads.*") ||
                 path.matches(".*/documents/accessible.*") ||
                 path.matches(".*/documents/knowledge-spaces.*") ||
+                path.matches(".*/documents/knowledge-space-layout.*") ||
                 path.matches(".*/knowledge-categories.*") ||
                 path.matches(".*/data-cleaning.*") ||
                 path.matches(".*/search/hybrid.*") ||

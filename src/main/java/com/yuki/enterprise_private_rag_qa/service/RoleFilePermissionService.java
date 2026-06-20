@@ -74,6 +74,7 @@ public class RoleFilePermissionService {
             case VIEW, PREVIEW, DOWNLOAD -> true;
             case UPLOAD_PUBLIC -> role == User.Role.KNOWLEDGE_ADMIN;
             case UPLOAD_DEPARTMENT -> role == User.Role.DEPT_LEAD;
+            case UPLOAD_PRIVATE -> role != User.Role.ADMIN;
             case DELETE, RECLEAN, REINDEX -> role == User.Role.DEPT_LEAD || role == User.Role.KNOWLEDGE_ADMIN;
             case RESUME_UPLOAD -> true;
         };

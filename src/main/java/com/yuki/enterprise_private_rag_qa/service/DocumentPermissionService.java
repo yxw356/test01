@@ -61,9 +61,22 @@ public class DocumentPermissionService {
             }
             return;
         }
+        if (scope == FileUpload.KnowledgeScope.PRIVATE) {
+            if (!canUploadPrivate(user)) {
+                throw new CustomException("Only authenticated users can upload personal knowledge", HttpStatus.FORBIDDEN);
+            }
+            return;
+        }
         if (scope == FileUpload.KnowledgeScope.DEPARTMENT && !canUploadDepartment(user, departmentId)) {
             throw new CustomException("Only department leads can upload department knowledge", HttpStatus.FORBIDDEN);
         }
+    }
+
+    public boolean canUploadPrivate(User user) {
+        if (user == null) {
+            return false;
+        }
+        return roleAllowed(user, FilePermissionAction.UPLOAD_PRIVATE, true);
     }
 
     public boolean canUploadPublic(User user) {

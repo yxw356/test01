@@ -27,6 +27,8 @@ public class LocalDevSeedController {
     private static final String DEPARTMENT_ID = "QA_DEPT";
     private static final String PUBLIC_MD5 = "11111111111111111111111111111111";
     private static final String DEPARTMENT_MD5 = "22222222222222222222222222222222";
+    private static final String PRIVATE_MD5 = "33333333333333333333333333333333";
+    private static final String FAQ_MD5 = "44444444444444444444444444444444";
 
     private final UserRepository userRepository;
     private final OrganizationTagRepository organizationTagRepository;
@@ -49,10 +51,12 @@ public class LocalDevSeedController {
 
         User knowledgeAdmin = ensureUser("kb_admin_test", User.Role.KNOWLEDGE_ADMIN);
         User departmentLead = ensureUser("dept_lead_test", User.Role.DEPT_LEAD);
-        ensureUser("dept_member_test", User.Role.DEPT_MEMBER);
+        User departmentMember = ensureUser("dept_member_test", User.Role.DEPT_MEMBER);
 
         upsertDocument(PUBLIC_MD5, "本地验收-公共知识.md", knowledgeAdmin, FileUpload.KnowledgeScope.PUBLIC, null, true);
         upsertDocument(DEPARTMENT_MD5, "本地验收-部门知识.md", departmentLead, FileUpload.KnowledgeScope.DEPARTMENT, DEPARTMENT_ID, false);
+        upsertDocument(PRIVATE_MD5, "本地验收-个人知识.md", departmentMember, FileUpload.KnowledgeScope.PRIVATE, null, false);
+        upsertDocument(FAQ_MD5, "本地验收-FAQ.txt", knowledgeAdmin, FileUpload.KnowledgeScope.PUBLIC, null, true);
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("departmentId", DEPARTMENT_ID);
@@ -64,7 +68,9 @@ public class LocalDevSeedController {
         ));
         data.put("documents", Map.of(
                 "public", PUBLIC_MD5,
-                "department", DEPARTMENT_MD5
+                "department", DEPARTMENT_MD5,
+                "private", PRIVATE_MD5,
+                "faq", FAQ_MD5
         ));
 
         return ResponseEntity.ok(Map.of(

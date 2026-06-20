@@ -116,6 +116,7 @@ declare namespace Api {
       | 'DOWNLOAD'
       | 'UPLOAD_PUBLIC'
       | 'UPLOAD_DEPARTMENT'
+      | 'UPLOAD_PRIVATE'
       | 'DELETE'
       | 'RECLEAN'
       | 'REINDEX'
@@ -133,6 +134,23 @@ declare namespace Api {
       userId: string;
       query: string;
       topK: number;
+      knowledgeScope?: 'PUBLIC' | 'DEPARTMENT' | 'PRIVATE' | null;
+      departmentId?: string | null;
+    }
+
+    interface KnowledgeSpaceLayout {
+      spaceOrder: string[];
+      collapsedSpaces: string[];
+    }
+
+    interface PreviewData {
+      fileName: string;
+      content: string;
+      fileSize: number;
+      chunkId?: number;
+      snippet?: string;
+      highlightStart?: number;
+      highlightEnd?: number;
     }
 
     interface SearchResult {

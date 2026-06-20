@@ -256,8 +256,28 @@ function readSpaceOrder() {
   }
 }
 
-function saveSpaceOrder() {
-  localStorage.setItem(knowledgeSpaceLayoutKey.value, JSON.stringify(spaceBoardItems.value.map(item => item.id)));
+async function loadServerSpaceLayout() {
+  const { error, data } = await request<Api.KnowledgeBase.KnowledgeSpaceLayout>({
+    url: '/documents/knowledge-space-layout'
+  });
+  if (!error && data?.spaceOrder?.length) {
+    localStorage.setItem(knowledgeSpaceLayoutKey.value, JSON.stringify(data.spaceOrder));
+    return data.spaceOrder;
+  }
+  return readSpaceOrder();
+}
+
+async function saveSpaceOrder() {
+  const order = spaceBoardItems.value.map(item => item.id);
+  localStorage.setItem(knowledgeSpaceLayoutKey.value, JSON.stringify(order));
+  await request({
+    url: '/documents/knowledge-space-layout',
+    method: 'PUT',
+    data: {
+      spaceOrder: order,
+      collapsedSpaces: []
+    }
+  });
 }
 
 function selectSpace(spaceId: string) {
@@ -288,6 +308,11 @@ function syncSpaceBoardItems() {
   if (nextSelected) selectSpace(nextSelected);
 }
 
+async function initializeSpaceBoard() {
+  await loadServerSpaceLayout();
+  syncSpaceBoardItems();
+}
+
 function spaceTypeTag(space: KnowledgeSpace) {
   if (space.type === 'PUBLIC') return { label: '公共', type: 'success' as const };
   if (space.type === 'PRIVATE') return { label: '个人', type: 'warning' as const };
@@ -299,12 +324,13 @@ function formatSpaceUpdatedAt(space: KnowledgeSpace) {
   return dayjs(space.lastUpdatedAt).format('YYYY-MM-DD HH:mm');
 }
 
-watch([knowledgeSpaces, knowledgeSpaceLayoutKey], syncSpaceBoardItems, { immediate: true });
+watch([knowledgeSpaces, knowledgeSpaceLayoutKey], () => syncSpaceBoardItems());
 
 let indexPollTimer: ReturnType<typeof setInterval> | null = null;
 
 onMounted(async () => {
   await Promise.all([getList(), refreshKnowledgeSpaces(), store.refreshUploadPreflight(), store.refreshCategories()]);
+  await initializeSpaceBoard();
   startIndexPolling();
 });
 
@@ -396,7 +422,13 @@ async function handleDelete(fileMd5: string) {
 
 // #region 文件上传
 const uploadVisible = ref(false);
-const canUploadKnowledge = computed(() => authStore.isSuperAdmin || authStore.isDeptLead || authStore.userInfo.role === 'KNOWLEDGE_ADMIN');
+const canUploadKnowledge = computed(
+  () =>
+    authStore.isSuperAdmin ||
+    authStore.isDeptLead ||
+    authStore.userInfo.role === 'KNOWLEDGE_ADMIN' ||
+    currentSpace.value?.type === 'PRIVATE'
+);
 const accessModeTag = computed(() => {
   if (authStore.isSuperAdmin) return { label: '全局管理', type: 'success' as const };
   if (authStore.userInfo.role === 'KNOWLEDGE_ADMIN') return { label: '公共上传', type: 'success' as const };
@@ -419,7 +451,7 @@ const uploadServiceComponents = computed(() => {
 const uploadServiceCommand = 'docker-compose -f docs/docker-compose.yaml up -d redis minio kafka';
 async function handleUpload() {
   if (!canUploadKnowledge.value) {
-    window.$message?.warning('当前角色暂无上传公共或部门知识的权限');
+    window.$message?.warning('当前角色暂无上传权限');
     return;
   }
   const ready = await store.checkUploadPreflight();
@@ -1107,7 +1139,7 @@ async function onBeforeUpload(
       />
     </NCard>
     <UploadDialog v-model:visible="uploadVisible" :initial-space="currentSpace" />
-    <SearchDialog v-model:visible="searchVisible" />
+    <SearchDialog v-model:visible="searchVisible" :initial-space="currentSpace" />
 
     <NModal v-model:show="cleaningRuleVisible" preset="card" title="清洗规则集" class="paper-modal max-w-980px w-[94%]">
       <div class="rule-manager">

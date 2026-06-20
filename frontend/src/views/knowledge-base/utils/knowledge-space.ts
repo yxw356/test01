@@ -84,7 +84,7 @@ function createKnowledgeSpace(id: string, tasks: KnowledgeSpaceTask[]): Knowledg
   return {
     id,
     type,
-    title: type === 'PUBLIC' ? '公共知识库' : `${departmentName || '未归属部门'}知识库`,
+    title: type === 'PUBLIC' ? '公共知识库' : type === 'PRIVATE' ? '个人知识库' : `${departmentName || '未归属部门'}知识库`,
     departmentId,
     fileCount: tasks.length,
     indexedCount: tasks.filter(task => !task.indexStatus || task.indexStatus === 2).length,

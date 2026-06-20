@@ -55,6 +55,8 @@ public class SearchController {
     @GetMapping("/hybrid")
     public Map<String, Object> hybridSearch(@RequestParam String query,
                                             @RequestParam(defaultValue = "10") int topK,
+                                            @RequestParam(required = false) String knowledgeScope,
+                                            @RequestParam(required = false) String departmentId,
                                             @RequestAttribute(value = "userId", required = false) String userId,
                                             HttpServletRequest request) {
         LogUtils.PerformanceMonitor monitor = LogUtils.startPerformanceMonitor("HYBRID_SEARCH");
@@ -65,8 +67,7 @@ public class SearchController {
             
             List<SearchResult> results;
             if (userId != null) {
-                // 如果有用户ID，使用带权限的搜索
-                results = hybridSearchService.searchWithPermission(query, userId, topK);
+                results = hybridSearchService.searchWithPermission(query, userId, topK, knowledgeScope, departmentId);
             } else {
                 // 如果没有用户ID，使用普通搜索（仅公开内容）
                 results = hybridSearchService.search(query, topK);
@@ -80,7 +81,9 @@ public class SearchController {
             auditService.recordSuccess(
                     userId, userId, AuditAction.SEARCH, "query",
                     AuditSupport.truncate(query, 128),
-                    "topK=" + topK + ", hits=" + results.size(),
+                    "topK=" + topK + ", hits=" + results.size()
+                            + (knowledgeScope != null ? ", scope=" + knowledgeScope : "")
+                            + (departmentId != null ? ", departmentId=" + departmentId : ""),
                     AuditSupport.clientIp(request),
                     System.currentTimeMillis() - start
             );

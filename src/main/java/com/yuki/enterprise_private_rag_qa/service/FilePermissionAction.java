@@ -6,6 +6,7 @@ public enum FilePermissionAction {
     DOWNLOAD,
     UPLOAD_PUBLIC,
     UPLOAD_DEPARTMENT,
+    UPLOAD_PRIVATE,
     DELETE,
     RECLEAN,
     REINDEX,

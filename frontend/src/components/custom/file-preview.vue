@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { nextTick, ref, watch } from 'vue';
 import { NButton, NSpin } from 'naive-ui';
 import { request } from '@/service/request';
 import { getFileExt } from '@/utils/common';
@@ -8,6 +8,7 @@ import SvgIcon from '@/components/custom/svg-icon.vue';
 interface Props {
   fileName: string;
   visible: boolean;
+  chunkId?: number | null;
 }
 
 interface Emits {
@@ -20,6 +21,8 @@ const emit = defineEmits<Emits>();
 const loading = ref(false);
 const downloading = ref(false);
 const content = ref('');
+const highlightStart = ref<number | null>(null);
+const highlightEnd = ref<number | null>(null);
 const error = ref('');
 
 function getFileIcon(fileName: string) {
@@ -34,22 +37,13 @@ function getFileIcon(fileName: string) {
 }
 
 watch(
-  () => props.fileName,
-  async newFileName => {
-    if (newFileName && props.visible) {
+  () => [props.fileName, props.chunkId, props.visible] as const,
+  async () => {
+    if (props.fileName && props.visible) {
       await loadPreviewContent();
     }
   },
   { immediate: true }
-);
-
-watch(
-  () => props.visible,
-  async visible => {
-    if (visible && props.fileName) {
-      await loadPreviewContent();
-    }
-  }
 );
 
 async function loadPreviewContent() {
@@ -58,17 +52,16 @@ async function loadPreviewContent() {
   loading.value = true;
   error.value = '';
   content.value = '';
+  highlightStart.value = null;
+  highlightEnd.value = null;
 
   try {
     const token = localStorage.getItem('token');
-    const { error: requestError, data } = await request<{
-      fileName: string;
-      content: string;
-      fileSize: number;
-    }>({
+    const { error: requestError, data } = await request<Api.KnowledgeBase.PreviewData>({
       url: '/documents/preview',
       params: {
         fileName: props.fileName,
+        chunkId: props.chunkId ?? undefined,
         token: token || undefined
       }
     });
@@ -80,6 +73,10 @@ async function loadPreviewContent() {
 
     if (data) {
       content.value = data.content;
+      highlightStart.value = data.highlightStart ?? null;
+      highlightEnd.value = data.highlightEnd ?? null;
+      await nextTick();
+      scrollToHighlight();
     }
   } catch (err: any) {
     error.value = `预览失败：${err.message || '网络错误'}`;
@@ -131,6 +128,14 @@ async function downloadFile() {
 function closePreview() {
   emit('close');
 }
+
+const previewRef = ref<HTMLElement | null>(null);
+
+function scrollToHighlight() {
+  if (highlightStart.value == null || !previewRef.value) return;
+  const ratio = highlightStart.value / Math.max(content.value.length, 1);
+  previewRef.value.scrollTop = previewRef.value.scrollHeight * ratio;
+}
 </script>
 
 <template>
@@ -168,8 +173,13 @@ function closePreview() {
         </div>
       </template>
       <template v-else>
-        <div class="content-wrapper">
-          <pre class="preview-text">{{ content }}</pre>
+        <div ref="previewRef" class="content-wrapper">
+          <pre class="preview-text">
+            <template v-if="highlightStart != null && highlightEnd != null">
+              {{ content.slice(0, highlightStart) }}<mark class="chunk-highlight">{{ content.slice(highlightStart, highlightEnd) }}</mark>{{ content.slice(highlightEnd) }}
+            </template>
+            <template v-else>{{ content }}</template>
+          </pre>
         </div>
       </template>
     </div>
@@ -202,6 +212,12 @@ function closePreview() {
       font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
       line-height: 1.7;
       margin: 0;
+    }
+
+    .chunk-highlight {
+      background: rgb(var(--primary-color) / 0.18);
+      border-radius: 4px;
+      padding: 0 2px;
     }
   }
 }

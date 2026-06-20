@@ -19,6 +19,7 @@ const chatStore = useChatStore();
 
 const previewVisible = ref(false);
 const previewFileName = ref('');
+const previewChunkId = ref<number | null>(null);
 const citationsExpanded = ref(false);
 
 // 存储文件名和对应的事件处理
@@ -83,8 +84,9 @@ function handleContentClick(event: MouseEvent) {
 }
 
 // 处理来源文件点击事件
-function openFilePreview(fileName: string) {
+function openFilePreview(fileName: string, chunkId?: number | null) {
   previewFileName.value = decodeURIComponent(fileName);
+  previewChunkId.value = chunkId ?? null;
   previewVisible.value = true;
 }
 
@@ -126,7 +128,7 @@ async function handleSourceFileClick(fileName: string) {
               v-for="citation in visibleCitations"
               :key="citation.index"
               class="citation-item"
-              @click.stop="citation.fileName && openFilePreview(citation.fileName)"
+              @click.stop="citation.fileName && openFilePreview(citation.fileName, citation.chunkId)"
             >
               <div class="citation-title">
                 <span class="citation-index">#{{ citation.index }}</span>
@@ -159,7 +161,12 @@ async function handleSourceFileClick(fileName: string) {
     </div>
 
     <NModal v-model:show="previewVisible" preset="card" title="文件预览" class="paper-modal max-w-1000px w-[80%]">
-      <FilePreview :file-name="previewFileName" :visible="previewVisible" @close="previewVisible = false" />
+      <FilePreview
+        :file-name="previewFileName"
+        :chunk-id="previewChunkId"
+        :visible="previewVisible"
+        @close="previewVisible = false"
+      />
     </NModal>
   </div>
 </template>

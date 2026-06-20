@@ -64,4 +64,7 @@ public interface FileUploadRepository extends JpaRepository<FileUpload, Long> {
     List<FileUpload> findByUserId(String userId);
 
     List<FileUpload> findByFileMd5In(List<String> md5List);
+
+    @Query("SELECT f FROM FileUpload f WHERE f.spaceId IS NULL OR f.spaceId = ''")
+    List<FileUpload> findBySpaceIdMissing();
 }

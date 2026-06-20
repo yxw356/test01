@@ -25,7 +25,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -209,71 +211,116 @@ public class DocumentService {
      * @return 文件预览内容，对于文本文件返回前几KB内容，非文本文件返回文件信息
      */
     public String getFilePreviewContent(String fileMd5, String fileName) {
-        logger.info("获取文件预览内容: fileMd5={}, fileName={}", fileMd5, fileName);
-        
+        return (String) getFilePreviewData(fileMd5, fileName, null).get("content");
+    }
+
+    public Map<String, Object> getFilePreviewData(String fileMd5, String fileName, Integer chunkId) {
+        logger.info("获取文件预览内容: fileMd5={}, fileName={}, chunkId={}", fileMd5, fileName, chunkId);
+
+        Map<String, Object> data = new HashMap<>();
+        FileUpload fileUpload = fileUploadRepository.findByFileMd5(fileMd5).orElse(null);
+        data.put("fileName", fileName);
+        data.put("fileSize", fileUpload != null ? fileUpload.getTotalSize() : 0L);
+
+        try {
+            String previewContent = buildPreviewContent(fileMd5, fileName);
+            data.put("content", previewContent);
+
+            if (chunkId != null && previewContent != null) {
+                applyChunkHighlight(data, fileMd5, chunkId, previewContent);
+            }
+            return data;
+        } catch (Exception e) {
+            logger.error("获取文件预览内容失败: fileMd5={}, fileName={}", fileMd5, fileName, e);
+            data.put("content", "预览失败: " + e.getMessage());
+            return data;
+        }
+    }
+
+    private String buildPreviewContent(String fileMd5, String fileName) {
         try {
             String parsedPreview = buildPreviewFromParsedChunks(fileMd5);
             if (parsedPreview != null) {
                 return parsedPreview;
             }
-            
+
             String objectName = "merged/" + fileName;
-            
             String fileExtension = getFileExtension(fileName).toLowerCase();
             boolean isTextFile = isTextFile(fileExtension);
-            
+
             if (isTextFile) {
-                // 对于文本文件，读取前10KB内容
                 try (InputStream inputStream = minioClient.getObject(
                         GetObjectArgs.builder()
                                 .bucket("uploads")
                                 .object(objectName)
                                 .build())) {
-                    
+
                     BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8));
                     StringBuilder content = new StringBuilder();
                     String line;
                     int bytesRead = 0;
-                    int maxBytes = 10240; // 10KB
-                    
+                    int maxBytes = 10240;
+
                     while ((line = reader.readLine()) != null && bytesRead < maxBytes) {
                         content.append(line).append("\n");
                         bytesRead += line.getBytes(StandardCharsets.UTF_8).length + 1;
                     }
-                    
+
                     String result = content.toString();
                     if (bytesRead >= maxBytes) {
                         result += "\n... (内容已截断，仅显示前10KB)";
                     }
-                    
+
                     logger.info("成功获取文本文件预览内容: fileMd5={}, contentLength={}", fileMd5, result.length());
                     return result;
                 }
-            } else {
-                // 对于非文本文件，返回文件信息
-                FileUpload fileUpload = fileUploadRepository.findByFileMd5(fileMd5)
-                        .orElseThrow(() -> new RuntimeException("文件不存在: " + fileMd5));
-                
-                String fileInfo = String.format(
+            }
+
+            FileUpload fileUpload = fileUploadRepository.findByFileMd5(fileMd5)
+                    .orElseThrow(() -> new RuntimeException("文件不存在: " + fileMd5));
+
+            return String.format(
                     "文件名: %s\n" +
-                    "文件大小: %s\n" +
-                    "文件类型: %s\n" +
-                    "上传时间: %s\n\n" +
-                    "此文件类型不支持预览，请下载后查看。",
+                            "文件大小: %s\n" +
+                            "文件类型: %s\n" +
+                            "上传时间: %s\n\n" +
+                            "此文件类型不支持预览，请下载后查看。",
                     fileName,
                     formatFileSize(fileUpload.getTotalSize()),
                     fileExtension.toUpperCase(),
                     fileUpload.getCreatedAt()
-                );
-                
-                logger.info("返回非文本文件信息: fileMd5={}", fileMd5);
-                return fileInfo;
-            }
-            
+            );
         } catch (Exception e) {
             logger.error("获取文件预览内容失败: fileMd5={}, fileName={}", fileMd5, fileName, e);
             return "预览失败: " + e.getMessage();
         }
+    }
+
+    private void applyChunkHighlight(Map<String, Object> data, String fileMd5, Integer chunkId, String previewContent) {
+        List<DocumentVector> vectors = documentVectorRepository.findByFileMd5(fileMd5);
+        if (vectors == null || vectors.isEmpty()) {
+            return;
+        }
+        vectors.stream()
+                .filter(vector -> chunkId.equals(vector.getChunkId()))
+                .findFirst()
+                .ifPresent(vector -> {
+                    String snippet = vector.getTextContent();
+                    data.put("chunkId", chunkId);
+                    data.put("snippet", snippet);
+                    if (snippet == null || snippet.isBlank()) {
+                        return;
+                    }
+                    String normalizedSnippet = snippet.trim();
+                    int start = previewContent.indexOf(normalizedSnippet);
+                    if (start < 0 && normalizedSnippet.length() > 40) {
+                        start = previewContent.indexOf(normalizedSnippet.substring(0, 40));
+                    }
+                    if (start >= 0) {
+                        data.put("highlightStart", start);
+                        data.put("highlightEnd", Math.min(start + normalizedSnippet.length(), previewContent.length()));
+                    }
+                });
     }
 
     private String buildPreviewFromParsedChunks(String fileMd5) {

@@ -197,6 +197,7 @@ rag:
     top-n: 80
   cross-encoder:
     model: "BAAI/bge-reranker-v2-m3"
+    api-url: ${RAG_RERANKER_API_URL:}
   mmr:
     lambda: 0.7
     similarity-threshold: 0.82
@@ -210,6 +211,10 @@ rag:
     temperature: 0.1
     supplementary-bm25-top-k: 10
     supplementary-vector-top-k: 10
+
+ops:
+  index-failure:
+    webhook-url: ${INDEX_FAILURE_WEBHOOK_URL:}
 
 management:
   endpoints:

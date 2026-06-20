@@ -58,6 +58,7 @@ const filePermissionOptions = [
   { label: '下载文件', value: 'DOWNLOAD', description: '允许获取文件下载链接' },
   { label: '上传公共知识', value: 'UPLOAD_PUBLIC', description: '允许上传全员可见知识' },
   { label: '上传部门知识', value: 'UPLOAD_DEPARTMENT', description: '允许上传部门专有知识' },
+  { label: '上传个人知识', value: 'UPLOAD_PRIVATE', description: '允许上传到个人知识库' },
   { label: '删除文件', value: 'DELETE', description: '允许删除有管理权的文件' },
   { label: '重新清洗', value: 'RECLEAN', description: '允许重新清洗并生成索引' },
   { label: '重建索引', value: 'REINDEX', description: '允许重新提交索引任务' },

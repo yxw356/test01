@@ -6,6 +6,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yuki.enterprise_private_rag_qa.exception.CustomException;
 import com.yuki.enterprise_private_rag_qa.model.OrganizationTag;
 import com.yuki.enterprise_private_rag_qa.model.User;
+import com.yuki.enterprise_private_rag_qa.model.FileUpload;
+import com.yuki.enterprise_private_rag_qa.service.AdminKnowledgeService;
+import com.yuki.enterprise_private_rag_qa.service.IndexFailureAlertService;
 import com.yuki.enterprise_private_rag_qa.repository.OrganizationTagRepository;
 import com.yuki.enterprise_private_rag_qa.repository.UserRepository;
 import com.yuki.enterprise_private_rag_qa.service.ConversationService;
@@ -56,6 +59,12 @@ public class AdminController {
     @Autowired
     private RoleFilePermissionService roleFilePermissionService;
 
+    @Autowired
+    private AdminKnowledgeService adminKnowledgeService;
+
+    @Autowired
+    private IndexFailureAlertService indexFailureAlertService;
+
     /**
      * 获取所有用户列表
      */
@@ -93,22 +102,25 @@ public class AdminController {
     public ResponseEntity<?> addKnowledgeDocument(
             @RequestHeader("Authorization") String token,
             @RequestParam("file") MultipartFile file,
-            @RequestParam("description") String description) {
+            @RequestParam(value = "description", required = false, defaultValue = "") String description) {
         
         String adminUsername = jwtUtils.extractUsernameFromToken(token.replace("Bearer ", ""));
-        validateAdmin(adminUsername);
+        User admin = validateAdmin(adminUsername);
         
         try {
-            // 这里应该调用知识库管理服务来处理文档
-            // knowledgeService.addDocument(file, description);
-            
-            Map<String, String> response = new HashMap<>();
-            response.put("message", "文档已成功添加到知识库");
-            return ResponseEntity.ok(response);
+            FileUpload document = adminKnowledgeService.ingestPublicDocument(admin, file, description);
+            return ResponseEntity.ok(Map.of(
+                    "code", 200,
+                    "message", "文档已成功添加到知识库",
+                    "data", Map.of(
+                            "fileMd5", document.getFileMd5(),
+                            "fileName", document.getFileName()
+                    )
+            ));
         } catch (Exception e) {
             LogUtils.logBusinessError("ADMIN_ADD_KNOWLEDGE", adminUsername, "添加知识库文档失败", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "添加文档失败: " + e.getMessage()));
+                    .body(Map.of("code", 500, "message", "添加文档失败: " + e.getMessage()));
         }
     }
 
@@ -121,20 +133,30 @@ public class AdminController {
             @PathVariable("documentId") String documentId) {
         
         String adminUsername = jwtUtils.extractUsernameFromToken(token.replace("Bearer ", ""));
-        validateAdmin(adminUsername);
+        User admin = validateAdmin(adminUsername);
         
         try {
-            // 这里应该调用知识库管理服务来删除文档
-            // knowledgeService.deleteDocument(documentId);
-            
-            Map<String, String> response = new HashMap<>();
-            response.put("message", "文档已成功从知识库中删除");
-            return ResponseEntity.ok(response);
+            adminKnowledgeService.deleteDocument(admin, documentId);
+            return ResponseEntity.ok(Map.of(
+                    "code", 200,
+                    "message", "文档已成功从知识库中删除"
+            ));
         } catch (Exception e) {
             LogUtils.logBusinessError("ADMIN_DELETE_KNOWLEDGE", adminUsername, "删除知识库文档失败", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "删除文档失败: " + e.getMessage()));
+                    .body(Map.of("code", 500, "message", "删除文档失败: " + e.getMessage()));
         }
+    }
+
+    @GetMapping("/index-failures")
+    public ResponseEntity<?> listIndexFailures(@RequestHeader("Authorization") String token) {
+        String adminUsername = jwtUtils.extractUsernameFromToken(token.replace("Bearer ", ""));
+        validateAdmin(adminUsername);
+        return ResponseEntity.ok(Map.of(
+                "code", 200,
+                "message", "获取索引失败任务成功",
+                "data", indexFailureAlertService.listIndexFailures()
+        ));
     }
 
     /**

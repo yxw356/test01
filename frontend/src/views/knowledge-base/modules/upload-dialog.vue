@@ -22,6 +22,7 @@ type KnowledgeScope = Api.KnowledgeBase.Form['knowledgeScope'];
 
 const canUploadPublic = computed(() => authStore.isSuperAdmin || authStore.userInfo.role === 'KNOWLEDGE_ADMIN');
 const canUploadDepartment = computed(() => authStore.isSuperAdmin || authStore.isDeptLead);
+const canUploadPrivate = computed(() => Boolean(authStore.userInfo.id || authStore.userInfo.username));
 
 const knowledgeScopeOptions = computed<{ label: string; value: KnowledgeScope; description: string }[]>(() => {
   const options: { label: string; value: KnowledgeScope; description: string }[] = [];
@@ -39,6 +40,13 @@ const knowledgeScopeOptions = computed<{ label: string; value: KnowledgeScope; d
       description: '仅所属部门成员、部门负责人和超级管理员可见'
     });
   }
+  if (canUploadPrivate.value) {
+    options.push({
+      label: '个人知识',
+      value: 'PRIVATE',
+      description: '仅本人可见，适合个人笔记与草稿资料'
+    });
+  }
   return options;
 });
 
@@ -49,6 +57,7 @@ const model = ref<Api.KnowledgeBase.Form>(createDefaultModel());
 function initialKnowledgeScope(): KnowledgeScope {
   if (props.initialSpace?.type === 'PUBLIC' && canUploadPublic.value) return 'PUBLIC';
   if (props.initialSpace?.type === 'DEPARTMENT' && canUploadDepartment.value) return 'DEPARTMENT';
+  if (props.initialSpace?.type === 'PRIVATE' && canUploadPrivate.value) return 'PRIVATE';
   return defaultKnowledgeScope.value;
 }
 
@@ -109,6 +118,9 @@ const cleaningRuleOptions = computed(() => {
   return cleaningRuleSets.value
     .filter(item => {
       if (model.value.knowledgeScope === 'PUBLIC') return item.knowledgeScope === 'PUBLIC';
+      if (model.value.knowledgeScope === 'PRIVATE') {
+        return item.knowledgeScope === 'PRIVATE' || item.knowledgeScope === 'PUBLIC';
+      }
       if (model.value.knowledgeScope === 'DEPARTMENT') {
         return item.knowledgeScope === 'PUBLIC' || item.departmentId === model.value.departmentId;
       }

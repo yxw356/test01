@@ -28,7 +28,7 @@ class KnowledgeSpaceServiceTest {
     void setUp() {
         organizationTagRepository = mock(OrganizationTagRepository.class);
         knowledgeSpaceRepository = mock(KnowledgeSpaceRepository.class);
-        service = new KnowledgeSpaceService(organizationTagRepository, knowledgeSpaceRepository);
+        service = new KnowledgeSpaceService(organizationTagRepository, knowledgeSpaceRepository, null);
     }
 
     @Test

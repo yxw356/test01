@@ -1,10 +1,15 @@
 <script setup lang="ts">
+import type { KnowledgeSpace } from '../utils/knowledge-space';
+
 defineOptions({
   name: 'SearchDialog'
 });
 
 const loading = ref(false);
 const visible = defineModel<boolean>('visible', { default: false });
+const props = defineProps<{
+  initialSpace?: KnowledgeSpace | null;
+}>();
 
 const { formRef, restoreValidation } = useNaiveForm();
 
@@ -15,7 +20,9 @@ function createDefaultModel(): Api.KnowledgeBase.SearchParams {
   return {
     userId: `${store.userInfo.id}`,
     query: '',
-    topK: 10
+    topK: 10,
+    knowledgeScope: props.initialSpace?.type ?? null,
+    departmentId: props.initialSpace?.departmentId ?? null
   };
 }
 

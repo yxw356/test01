@@ -1,20 +1,78 @@
 <script setup lang="ts">
-import { ACTIVE_KNOWLEDGE_SPACE_KEY } from '@/views/knowledge-base/utils/knowledge-space';
+import {
+  ACTIVE_KNOWLEDGE_SPACE_KEY,
+  buildKnowledgeSpaces,
+  type KnowledgeSpace
+} from '@/views/knowledge-base/utils/knowledge-space';
 import ChatList from './modules/chat-list.vue';
 import InputBox from './modules/input-box.vue';
 
-const activeSpaceTitle = ref('全部可访问知识');
+const activeSpace = ref<KnowledgeSpace | null>(null);
+const spaceOptions = ref<Array<{ label: string; value: string }>>([]);
 
-function refreshActiveSpaceTitle() {
+function readActiveSpaceContext() {
   try {
-    const context = JSON.parse(localStorage.getItem(ACTIVE_KNOWLEDGE_SPACE_KEY) || '{}');
-    activeSpaceTitle.value = context.title || '全部可访问知识';
+    return JSON.parse(localStorage.getItem(ACTIVE_KNOWLEDGE_SPACE_KEY) || '{}') as {
+      id?: string;
+      title?: string;
+      knowledgeScope?: KnowledgeSpace['type'];
+      departmentId?: string | null;
+    };
   } catch {
-    activeSpaceTitle.value = '全部可访问知识';
+    return {};
   }
 }
 
-onMounted(refreshActiveSpaceTitle);
+function persistActiveSpace(space: KnowledgeSpace | null) {
+  activeSpace.value = space;
+  if (!space) {
+    localStorage.removeItem(ACTIVE_KNOWLEDGE_SPACE_KEY);
+    return;
+  }
+  localStorage.setItem(
+    ACTIVE_KNOWLEDGE_SPACE_KEY,
+    JSON.stringify({
+      id: space.id,
+      title: space.title,
+      knowledgeScope: space.type,
+      departmentId: space.departmentId
+    })
+  );
+}
+
+async function refreshSpaceOptions() {
+  const { error, data } = await request<Api.KnowledgeBase.KnowledgeSpaceSummary[]>({
+    url: '/documents/knowledge-spaces'
+  });
+  const spaces = !error && data?.length ? data : buildKnowledgeSpaces([]);
+  spaceOptions.value = spaces.map(space => ({ label: space.title, value: space.id }));
+
+  const saved = readActiveSpaceContext();
+  const matched = spaces.find(space => space.id === saved.id) || spaces[0] || null;
+  persistActiveSpace(matched);
+}
+
+function handleSpaceChange(spaceId: string | null) {
+  const space = spaceOptions.value.find(item => item.value === spaceId);
+  if (!space) {
+    persistActiveSpace(null);
+    return;
+  }
+  persistActiveSpace({
+    id: space.value,
+    title: space.label,
+    type: space.value === 'PUBLIC' ? 'PUBLIC' : space.value.startsWith('PRIVATE') ? 'PRIVATE' : 'DEPARTMENT',
+    departmentId: space.value.startsWith('DEPARTMENT:') ? space.value.replace('DEPARTMENT:', '') : null,
+    fileCount: 0,
+    indexedCount: 0,
+    processingCount: 0,
+    interruptedCount: 0,
+    cleaningIssueCount: 0,
+    lastUpdatedAt: null
+  });
+}
+
+onMounted(refreshSpaceOptions);
 </script>
 
 <template>
@@ -31,8 +89,15 @@ onMounted(refreshActiveSpaceTitle);
           面向龙汇内部制度、流程、项目资料的知识库问答
         </p>
       </div>
-      <div class="header-tags flex flex-wrap justify-end gap-2 lt-sm:hidden">
-        <NTag :bordered="false" size="small" type="warning">范围：{{ activeSpaceTitle }}</NTag>
+      <div class="header-tags flex flex-wrap items-center justify-end gap-2 lt-sm:hidden">
+        <NSelect
+          class="w-220px"
+          size="small"
+          :value="activeSpace?.id ?? null"
+          :options="spaceOptions"
+          placeholder="选择知识空间"
+          @update:value="handleSpaceChange"
+        />
         <NTag :bordered="false" size="small">权限隔离</NTag>
         <NTag :bordered="false" size="small" type="info">混合检索</NTag>
         <NTag :bordered="false" size="small" type="success">来源追溯</NTag>
