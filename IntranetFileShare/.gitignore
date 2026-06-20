@@ -1,0 +1,9 @@
+bin/
+obj/
+*.db
+*.user
+.vs/
+agent.json
+appsettings.Development.json
+
+# Keep release/ tracked via Git LFS (see .gitattributes)

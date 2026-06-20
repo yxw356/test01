@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- Allow restoring WPF projects on non-Windows for CI/doc purposes -->
+    <EnableWindowsTargeting Condition="'$(OS)' != 'Windows_NT'">true</EnableWindowsTargeting>
+  </PropertyGroup>
+</Project>

@@ -83,6 +83,9 @@ learn/
 modify/
 .claude/
 .worktrees/
+IntranetFileShare/release/
+IntranetFileShare/**/bin/
+IntranetFileShare/**/obj/
 data/
 *.mv.db
 *.trace.db

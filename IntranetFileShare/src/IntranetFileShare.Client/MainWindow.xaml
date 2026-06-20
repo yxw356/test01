@@ -1,0 +1,72 @@
+<Window x:Class="IntranetFileShare.Client.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:IntranetFileShare.Client"
+        Title="内网文件共享 - 客户端"
+        Height="600" Width="960"
+        WindowStartupLocation="CenterScreen">
+    <Window.Resources>
+        <local:InverseBoolConverter x:Key="InverseBool"/>
+    </Window.Resources>
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Login bar -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+            <TextBlock Text="服务器" VerticalAlignment="Center" Margin="0,0,4,0"/>
+            <TextBox Width="200" Text="{Binding ServerUrl, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsLoggedIn, Converter={StaticResource InverseBool}}"/>
+            <TextBlock Text="用户名" VerticalAlignment="Center" Margin="12,0,4,0"/>
+            <TextBox Width="120" Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}"/>
+            <TextBlock Text="密码" VerticalAlignment="Center" Margin="12,0,4,0"/>
+            <PasswordBox x:Name="PasswordBox" Width="120" Margin="0,0,8,0"/>
+            <Button Content="登录" Command="{Binding LoginCommand}" Padding="12,4"/>
+            <Button Content="刷新共享" Command="{Binding RefreshSharesCommand}" Padding="12,4" Margin="8,0,0,0"
+                    IsEnabled="{Binding IsLoggedIn}"/>
+        </StackPanel>
+
+        <!-- Main content -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="220"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <GroupBox Header="共享列表" Grid.Column="0" Margin="0,0,8,0">
+                <ListBox ItemsSource="{Binding Shares}"
+                         SelectedItem="{Binding SelectedShare}"
+                         DisplayMemberPath="LogicalName"/>
+            </GroupBox>
+
+            <Grid Grid.Column="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <Button Content="上级目录" Command="{Binding GoUpCommand}" Padding="8,4"/>
+                    <Button Content="刷新" Command="{Binding LoadFilesCommand}" Padding="8,4" Margin="8,0,0,0"/>
+                    <Button Content="下载" Command="{Binding DownloadCommand}" Padding="8,4" Margin="8,0,0,0"/>
+                    <Button Content="上传" Command="{Binding UploadCommand}" Padding="8,4" Margin="8,0,0,0"/>
+                    <Button Content="删除" Command="{Binding DeleteCommand}" Padding="8,4" Margin="8,0,0,0"/>
+                </StackPanel>
+                <DataGrid Grid.Row="1" ItemsSource="{Binding Files}"
+                          SelectedItem="{Binding SelectedFile}"
+                          AutoGenerateColumns="False" IsReadOnly="True"
+                          MouseDoubleClick="FilesGrid_OnMouseDoubleClick">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*"/>
+                        <DataGridCheckBoxColumn Header="目录" Binding="{Binding IsDirectory}" Width="60"/>
+                        <DataGridTextColumn Header="大小" Binding="{Binding Size}" Width="100"/>
+                        <DataGridTextColumn Header="修改时间" Binding="{Binding ModifiedAt}" Width="160"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </Grid>
+
+        <TextBlock Grid.Row="2" Text="{Binding StatusMessage}" Margin="0,8,0,0" Foreground="Gray"/>
+    </Grid>
+</Window>

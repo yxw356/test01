@@ -1,0 +1,13 @@
+{
+  "ServerUrl": "http://127.0.0.1:8443",
+  "ListenPort": 5001,
+  "AgentId": 0,
+  "AgentKey": "",
+  "MachineName": "",
+  "Shares": [
+    {
+      "ShareId": 1,
+      "LocalPath": "D:\\Finance"
+    }
+  ]
+}
